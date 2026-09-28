@@ -14,6 +14,26 @@
 .fixture-generator small { color: #7f8b80; }
 .preview-loading { display: block; padding: 20px; color: #a4ada3; font-size: 12px; }
 
+.model-modal { width: min(640px, calc(100vw - 32px)); min-width: 0; max-height: calc(100vh - 32px); overflow: auto; }
+.model-modal > p { margin: 10px 0 14px; }
+.model-catalog-status { color: #9dbb85; font-size: 10px; font-weight: 700; margin-bottom: 10px; }
+.model-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 17px; }
+.model-option { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; text-align: left; border: 1px solid #3e4844; background: #1a2125; color: #dce5d8; border-radius: 7px; padding: 11px 12px; cursor: pointer; }
+.model-option:hover { border-color: #8aa66e; background: #202a26; }
+.model-option.selected { border-color: #bde58a; background: #253328; box-shadow: inset 0 0 0 1px #bde58a33; }
+.model-option:disabled { opacity: .48; cursor: not-allowed; }
+.model-option-top { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.model-option-top strong { font-size: 12px; letter-spacing: -.015em; }
+.model-badge { flex: none; color: #c8e3ac; border: 1px solid #596c4f; border-radius: 3px; padding: 2px 5px; font-size: 8px; text-transform: uppercase; letter-spacing: .04em; }
+.model-maker { color: #8e9c90; font-size: 9px; overflow-wrap: anywhere; }
+.model-description { color: #c3ccc0; font-size: 10px; line-height: 1.4; }
+.model-price { margin-top: auto; color: #a9c795; font-size: 9px; font-weight: 650; }
+.model-custom { border-top: 1px solid #38423d; padding-top: 13px; margin: 5px 0 17px; color: #9fac9c; font-size: 10px; }
+.model-custom summary { cursor: pointer; }
+.model-custom label { margin-top: 12px; }
+.model-modal .model-footnote { margin: -4px 0 9px; color: #7f8d81; font-size: 10px; }
+.model-modal .modal-actions { margin-top: 12px; }
+
 @media (max-width: 750px) {
   .topbar-actions .text-button { display: flex; padding: 0 6px; gap: 5px; font-size: 10px; }
   .topbar { gap: 7px; padding: 0 10px; }
@@ -28,3 +48,4 @@
   .topbar-actions .text-button { font-size: 0; }
   .topbar-actions .text-button svg { width: 16px; height: 16px; }
 }
+@media (max-width: 600px) { .model-options { grid-template-columns: 1fr; } }

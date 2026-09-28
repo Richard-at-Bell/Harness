@@ -9,6 +9,7 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { ArrowDownToLine, ArrowRight, Check, ChevronDown, Code2, FileCode2, FilePlus2, FileSpreadsheet, FolderOpen, KeyRound, LayoutPanelLeft, MessageSquareText, PanelRightClose, Play, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { DEFAULT_MODEL, runAgent } from './agent';
+import { loadLiveModels, MODEL_CHOICES, modelName, pricePerMillion, type LiveModel } from './models';
 import { downloadBlob, exportZip, importZip } from './export';
 import { fixtureIds, generateRows, readTable, tableBytes, type Row, type Table } from './fixtures';
 import { buildPreview, codeSignature } from './preview';
@@ -65,6 +66,8 @@ function App() {
   const [prompt, setPrompt] = useState('');
   const [key, setKey] = useState('');
   const [modelId, setModelId] = useState(DEFAULT_MODEL);
+  const [liveModels, setLiveModels] = useState<Map<string, LiveModel> | null>(null);
+  const [catalogError, setCatalogError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newItem, setNewItem] = useState<'file' | 'table' | null>(null);
   const [newItemName, setNewItemName] = useState('');
@@ -88,7 +91,8 @@ function App() {
       setFiles(workspace.snapshot());
       setChat(session.chat);
       setTools(session.tools);
-      setHistory(session.agentMessages);
+      setHistory(session.modelId ? session.agentMessages : []);
+      setModelId(session.modelId || DEFAULT_MODEL);
       setReady(true);
     }).catch(error => setNotice(String(error.message || error)));
     return () => { active = false; };
@@ -96,9 +100,9 @@ function App() {
 
   useEffect(() => {
     if (!ready) return;
-    const timer = window.setTimeout(() => { saveSession({ chat, tools, agentMessages: history }).catch(console.error); }, 350);
+    const timer = window.setTimeout(() => { saveSession({ chat, tools, agentMessages: history, modelId }).catch(console.error); }, 350);
     return () => window.clearTimeout(timer);
-  }, [ready, chat, tools, history]);
+  }, [ready, chat, tools, history, modelId]);
 
   const signature = useMemo(() => codeSignature(files), [files]);
   useEffect(() => {
@@ -116,6 +120,15 @@ function App() {
   }, [ready, files, selectedTableId]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat, busy]);
+
+  useEffect(() => {
+    if (!settingsOpen || liveModels) return;
+    const controller = new AbortController();
+    loadLiveModels(controller.signal).then(models => { setLiveModels(models); setCatalogError(''); }).catch(error => {
+      if (!controller.signal.aborted) setCatalogError(String(error instanceof Error ? error.message : error));
+    });
+    return () => controller.abort();
+  }, [settingsOpen, liveModels]);
 
   useEffect(() => {
     if (!pending || !diffPath) return;
@@ -177,6 +190,11 @@ function App() {
     const id = /^fixtures\/([^/]+)\.(csv|xlsx)$/.exec(path)?.[1];
     if (id) frameRef.current?.contentWindow?.postMessage({ kind: 'table.changed', table: id, token: tokenRef.current }, '*');
   };
+  const chooseModel = (id: string) => {
+    if (id === modelId) return;
+    setModelId(id);
+    setHistory([]);
+  };
 
   async function saveFile(path: string, content: string) {
     const workspace = workspaceRef.current;
@@ -196,7 +214,7 @@ function App() {
     const stage = workspace.stage();
     const answerId = crypto.randomUUID();
     setPrompt(''); setBusy(true);
-    setChat(current => [...current, { id: crypto.randomUUID(), role: 'user', text, time: new Date().toISOString() }, { id: answerId, role: 'assistant', text: '', time: new Date().toISOString() }]);
+    setChat(current => [...current, { id: crypto.randomUUID(), role: 'user', text, time: new Date().toISOString() }, { id: answerId, role: 'assistant', text: '', time: new Date().toISOString(), model: modelId }]);
     try {
       const outcome = await runAgent(text, key.trim(), modelId.trim(), stage, history, {
         onText: value => setChat(current => current.map(line => line.id === answerId ? { ...line, text: value } : line)),
@@ -339,16 +357,37 @@ function App() {
       {rightOpen ? <aside className="agent-pane"><div className="agent-header"><div><div className="agent-title"><Sparkles size={16} /> Agent</div><span>Build with your workspace</span></div><button onClick={() => setRightOpen(false)} title="Hide agent"><PanelRightClose size={18} /></button></div>
         <div className="agent-scroll">
           {!chat.length && <div className="empty-chat"><div className="empty-chat-icon"><MessageSquareText size={21} /></div><h2>What should we make?</h2><p>Ask the agent to shape your project. Every file change is yours to review.</p><div className="suggestions"><button onClick={() => setPrompt('Add a priority field to tasks and show high-priority tasks first.')}>Add task priorities <ArrowRight size={14} /></button><button onClick={() => setPrompt('Make the to-do app work well on small screens.')}>Improve mobile layout <ArrowRight size={14} /></button><button onClick={() => setPrompt('Add a filter for all, open, and completed tasks.')}>Add task filters <ArrowRight size={14} /></button></div></div>}
-          {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
+          {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : line.model ? modelName(line.model) : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
           {tools.length > 0 && <div className="tool-activity"><span>RECENT ACTIVITY</span>{tools.slice(-5).map(line => <div key={line.id}><span className={line.status === 'error' ? 'tool-error' : 'tool-check'}>{line.status === 'error' ? '!' : '✓'}</span><strong>{line.name.replaceAll('_', ' ')}</strong><small>{line.summary}</small></div>)}</div>}
           {pending && <div className="pending-card"><div className="pending-top"><span><span className="pending-dot" /> REVIEW CHANGES</span><strong>{changed.length} {changed.length === 1 ? 'file' : 'files'}</strong></div><div className="pending-files">{changed.map(path => <button key={path} onClick={() => { setDiffPath(path); setDiffOpen(true); }}>{iconFor(path)} {path} <ArrowRight size={13} /></button>)}</div><div className="pending-actions"><button onClick={rejectStage}>Discard</button><button className="accept" onClick={acceptStage}><Check size={14} /> Accept changes</button></div></div>}
           <div ref={bottomRef} />
         </div>
-        <div className="composer"><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><button className="model-button" onClick={() => setSettingsOpen(true)}><span className={key ? 'model-dot ready' : 'model-dot'} /> {key ? modelId.split('/').at(-1) : 'Add OpenRouter key'} <ChevronDown size={13} /></button><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p>Agent changes are staged for your review.</p></div>
+        <div className="composer"><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><button className="model-button" onClick={() => setSettingsOpen(true)}><span className={key ? 'model-dot ready' : 'model-dot'} /> {modelName(modelId)} <ChevronDown size={13} /></button><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p>{key ? 'Agent changes are staged for your review.' : 'Add an OpenRouter key in model settings to start.'}</p></div>
       </aside> : <button className="agent-reopen" onClick={() => setRightOpen(true)}><Sparkles size={17} /> Agent</button>}
     </div>
 
-    {settingsOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">MODEL CONNECTION</span><h2>OpenRouter</h2></div><button onClick={() => setSettingsOpen(false)}><X size={20} /></button></div><p>Use your own API key for agent conversations. It stays in this tab and is never added to project files or ZIP exports.</p><label>API key<input type="password" value={key} placeholder="sk-or-v1-…" onChange={event => setKey(event.target.value)} autoComplete="off" /></label><label>Model ID<input value={modelId} onChange={event => setModelId(event.target.value)} spellCheck={false} /></label><div className="modal-actions"><button onClick={() => setSettingsOpen(false)}>Close</button><button className="primary-small" onClick={() => setSettingsOpen(false)}><Check size={15} /> Save for this tab</button></div></div></div>}
+    {settingsOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
+      <div className="settings-modal model-modal">
+        <div className="modal-head"><div><span className="section-kicker">MODEL CONNECTION</span><h2>Choose an agent model</h2></div><button onClick={() => setSettingsOpen(false)} title="Close"><X size={20} /></button></div>
+        <p>Choose a tool-capable OpenRouter model. Prices update from OpenRouter when available.</p>
+        <div className="model-catalog-status">{liveModels ? 'Live availability and prices' : catalogError ? 'Live catalog unavailable; curated models remain selectable' : 'Checking live availability and prices…'}</div>
+        <div className="model-options">{MODEL_CHOICES.map(choice => {
+          const live = liveModels?.get(choice.id);
+          const input = pricePerMillion(live?.pricing?.prompt);
+          const output = pricePerMillion(live?.pricing?.completion);
+          return <button key={choice.id} type="button" className={`model-option ${modelId === choice.id ? 'selected' : ''}`} disabled={Boolean(liveModels && !live)} onClick={() => chooseModel(choice.id)} aria-pressed={modelId === choice.id}>
+            <span className="model-option-top"><strong>{choice.name}</strong><span className="model-badge">{choice.badge}</span></span>
+            <span className="model-maker">{choice.maker} · {choice.id}</span>
+            <span className="model-description">{choice.description}</span>
+            <span className="model-price">{liveModels && !live ? 'Unavailable on OpenRouter' : input && output ? `${input} in / ${output} out per 1M tokens` : 'Pricing loads from OpenRouter'}</span>
+          </button>;
+        })}</div>
+        <details className="model-custom"><summary>Use another model ID</summary><label>OpenRouter model ID<input value={modelId} onChange={event => chooseModel(event.target.value)} spellCheck={false} /></label></details>
+        <label>API key<input type="password" value={key} placeholder="sk-or-v1-…" onChange={event => setKey(event.target.value)} autoComplete="off" /></label>
+        <p className="model-footnote">The key stays in this tab. Changing models starts fresh agent context while keeping your project and visible chat.</p>
+        <div className="modal-actions"><button className="primary-small" onClick={() => setSettingsOpen(false)}><Check size={15} /> Use {modelName(modelId)}</button></div>
+      </div>
+    </div>}
 
     {newItem && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setNewItem(null); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">PROJECT WORKSPACE</span><h2>New {newItem}</h2></div><button onClick={() => setNewItem(null)} title="Close"><X size={20} /></button></div><p>{newItem === 'file' ? 'Enter a project-relative path, such as about.html.' : 'Enter a table name. A CSV with id and name columns will be created.'}</p><label>{newItem === 'file' ? 'File path' : 'Table name'}<input autoFocus value={newItemName} onChange={event => setNewItemName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createNewItem(); }} placeholder={newItem === 'file' ? 'about.html' : 'products'} /></label><div className="modal-actions"><button onClick={() => setNewItem(null)}>Cancel</button><button className="primary-small" onClick={createNewItem}><Plus size={15} /> Create</button></div></div></div>}
 

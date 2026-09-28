@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite in a current Chromium browser. The workspace uses Origin Private File System and IndexedDB. The **Model settings** button accepts a user-provided OpenRouter key for the current tab only; the default model is `google/gemini-2.5-flash`.
+Open the local URL printed by Vite in a current Chromium browser. The workspace uses Origin Private File System and IndexedDB. The **Model settings** button accepts a user-provided OpenRouter key for the current tab only. The clickable [model picker](docs/model-selection.md) defaults to Claude Sonnet 5 and includes five alternatives.
 
 ```sh
 npm test

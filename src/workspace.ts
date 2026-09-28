@@ -2,9 +2,9 @@ import { openDB, type IDBPDatabase } from 'idb';
 import { templateFiles } from './template';
 
 export type FileMap = Map<string, Uint8Array>;
-export type ChatLine = { id: string; role: 'user' | 'assistant' | 'system'; text: string; time: string };
+export type ChatLine = { id: string; role: 'user' | 'assistant' | 'system'; text: string; time: string; model?: string };
 export type ToolLine = { id: string; time: string; name: string; status: 'started' | 'ok' | 'error'; summary: string };
-export type SavedSession = { chat: ChatLine[]; tools: ToolLine[]; agentMessages: unknown[] };
+export type SavedSession = { chat: ChatLine[]; tools: ToolLine[]; agentMessages: unknown[]; modelId?: string };
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

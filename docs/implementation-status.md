@@ -8,7 +8,7 @@ The [specification index](README.md) describes the intended product. This page r
 | --- | --- | --- |
 | Project workspace | OPFS files, IndexedDB conversation, template, ZIP import/export | Atomic write journal, multiple projects, checkpoints |
 | Editor | Monaco HTML/CSS/JavaScript editing and diff review | Binary asset browser, rename/delete UI, accessibility pass |
-| Agent | Pi agent core and Pi AI through OpenRouter; staged file and table tools | Cancellation, tool payload limits, richer trace and model catalog refresh |
+| Agent | Pi agent core and Pi AI through OpenRouter; staged file and table tools; six clickable model choices with live availability and prices | Cancellation, tool payload limits, richer trace and broader model catalog discovery |
 | Preview | Sandboxed iframe with inline project CSS/JS, local images up to 2 MB, and a table bridge | Other asset types, console capture, broader multipage support |
 | Data | CSV/XLSX table editor, import, conversion, seeded row generation, preview mutations | General column schema editor, large table handling |
 | Export | Static project plus fixture seed, chat and tool events, manifest with hashes | Checkpoints and full agent trace in ZIP, schema migration |

@@ -2,10 +2,11 @@ import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-age
 import { createModels, Type, contentText } from '@earendil-works/pi-ai';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
 import { readTable, tableBytes, type Row } from './fixtures';
+import { DEFAULT_MODEL } from './models';
 import type { Stage, ToolLine } from './workspace';
 import { toText } from './workspace';
 
-export const DEFAULT_MODEL = 'google/gemini-2.5-flash';
+export { DEFAULT_MODEL };
 
 const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Preserve it unless the user explicitly asks to change data behavior. Use read_table and write_table for fixture data, especially XLSX. Read relevant files before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
 
@@ -91,8 +92,13 @@ export type AgentCallbacks = {
 export async function runAgent(prompt: string, key: string, modelId: string, stage: Stage, prior: unknown[], callbacks: AgentCallbacks): Promise<{ text: string; messages: AgentMessage[] }> {
   const models = createModels();
   models.setProvider(openrouterProvider());
-  const model = models.getModel('openrouter', modelId);
-  if (!model) throw new Error(`OpenRouter model is not in the installed catalog: ${modelId}`);
+  const listedModel = models.getModel('openrouter', modelId);
+  if (!listedModel) throw new Error(`OpenRouter model is not in the installed catalog: ${modelId}`);
+  // OpenRouter's browser CORS policy allows its Chat Completions transport.
+  // Its Anthropic Messages transport requires headers unavailable to browser preflight.
+  const model = listedModel.api === 'anthropic-messages'
+    ? { ...listedModel, api: 'openai-completions' as const, baseUrl: 'https://openrouter.ai/api/v1', compat: { thinkingFormat: 'openrouter' as const } }
+    : listedModel;
   const agent = new Agent({
     initialState: { systemPrompt, model, tools: createTools(stage), messages: prior.length ? prior as AgentMessage[] : undefined },
     streamFn: (selected, context, options) => models.streamSimple(selected, context, { ...options, apiKey: key }),
@@ -109,6 +115,9 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
   });
   await agent.prompt(prompt);
   const last = [...agent.state.messages].reverse().find(message => message.role === 'assistant');
+  if (!last || last.role !== 'assistant') throw new Error(agent.state.errorMessage || 'Model returned no assistant response');
+  if (last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last.errorMessage || agent.state.errorMessage || `Model stopped: ${last.stopReason}`);
   const text = last && last.role === 'assistant' ? contentText(last.content) : streamed;
+  if (!text.trim() && !stage.changes().length) throw new Error('Model returned an empty response');
   return { text, messages: agent.state.messages };
 }
