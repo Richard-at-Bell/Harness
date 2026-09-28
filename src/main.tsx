@@ -1,0 +1,362 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import Editor, { DiffEditor, loader } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
+import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import { ArrowDownToLine, ArrowRight, Check, ChevronDown, Code2, FileCode2, FilePlus2, FileSpreadsheet, FolderOpen, KeyRound, LayoutPanelLeft, MessageSquareText, PanelRightClose, Play, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react';
+import { DEFAULT_MODEL, runAgent } from './agent';
+import { downloadBlob, exportZip, importZip } from './export';
+import { fixtureIds, generateRows, readTable, tableBytes, type Row, type Table } from './fixtures';
+import { buildPreview, codeSignature } from './preview';
+import { templateFiles } from './template';
+import { loadSession, saveSession, Stage, toBytes, toText, validPath, Workspace, type ChatLine, type FileMap, type ToolLine } from './workspace';
+import './styles.css';
+
+self.MonacoEnvironment = {
+  getWorker(_id, label) {
+    if (label === 'json') return new jsonWorker();
+    if (['css', 'scss', 'less'].includes(label)) return new cssWorker();
+    if (['html', 'handlebars', 'razor'].includes(label)) return new htmlWorker();
+    if (['typescript', 'javascript'].includes(label)) return new tsWorker();
+    return new editorWorker();
+  },
+};
+loader.config({ monaco });
+
+type View = 'split' | 'code' | 'preview';
+type Tab = 'files' | 'data';
+
+function language(path: string) {
+  if (path.endsWith('.html')) return 'html';
+  if (path.endsWith('.css')) return 'css';
+  if (path.endsWith('.js')) return 'javascript';
+  if (path.endsWith('.json')) return 'json';
+  if (path.endsWith('.csv')) return 'plaintext';
+  return 'plaintext';
+}
+
+function iconFor(path: string) {
+  return path.endsWith('.csv') || path.endsWith('.xlsx') ? <FileSpreadsheet size={15} /> : <FileCode2 size={15} />;
+}
+
+function App() {
+  const workspaceRef = useRef<Workspace | null>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+  const tableImportRef = useRef<HTMLInputElement>(null);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const tokenRef = useRef(crypto.randomUUID());
+  const [ready, setReady] = useState(false);
+  const [files, setFiles] = useState<FileMap>(new Map());
+  const [selected, setSelected] = useState('app.js');
+  const [tab, setTab] = useState<Tab>('files');
+  const [view, setView] = useState<View>(() => window.innerWidth <= 1200 ? 'preview' : 'split');
+  const [previewDoc, setPreviewDoc] = useState('');
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const [previewBuildId, setPreviewBuildId] = useState(0);
+  const [chat, setChat] = useState<ChatLine[]>([]);
+  const [tools, setTools] = useState<ToolLine[]>([]);
+  const [history, setHistory] = useState<unknown[]>([]);
+  const [prompt, setPrompt] = useState('');
+  const [key, setKey] = useState('');
+  const [modelId, setModelId] = useState(DEFAULT_MODEL);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newItem, setNewItem] = useState<'file' | 'table' | null>(null);
+  const [newItemName, setNewItemName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<Stage | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffPath, setDiffPath] = useState('');
+  const [diffTexts, setDiffTexts] = useState({ original: '', modified: '' });
+  const [table, setTable] = useState<Table | null>(null);
+  const [selectedTableId, setSelectedTableId] = useState('todos');
+  const [generationSeed, setGenerationSeed] = useState(42);
+  const [generationCount, setGenerationCount] = useState(8);
+  const [notice, setNotice] = useState('');
+  const [rightOpen, setRightOpen] = useState(() => window.innerWidth > 750);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([Workspace.open(), loadSession()]).then(([workspace, session]) => {
+      if (!active) return;
+      workspaceRef.current = workspace;
+      setFiles(workspace.snapshot());
+      setChat(session.chat);
+      setTools(session.tools);
+      setHistory(session.agentMessages);
+      setReady(true);
+    }).catch(error => setNotice(String(error.message || error)));
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const timer = window.setTimeout(() => { saveSession({ chat, tools, agentMessages: history }).catch(console.error); }, 350);
+    return () => window.clearTimeout(timer);
+  }, [ready, chat, tools, history]);
+
+  const signature = useMemo(() => codeSignature(files), [files]);
+  useEffect(() => {
+    if (!ready) return;
+    let active = true;
+    buildPreview(files, tokenRef.current).then(doc => { if (active) { setPreviewDoc(doc); setPreviewBuildId(id => id + 1); } }).catch(error => setNotice(String(error.message || error)));
+    return () => { active = false; };
+  }, [ready, signature, previewVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!ready) return;
+    let active = true;
+    readTable(files, selectedTableId).then(value => { if (active) setTable(value); }).catch(() => { if (active) setTable(null); });
+    return () => { active = false; };
+  }, [ready, files, selectedTableId]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat, busy]);
+
+  useEffect(() => {
+    if (!pending || !diffPath) return;
+    let active = true;
+    async function render(bytes: Uint8Array | undefined) {
+      if (!bytes) return '';
+      if (!diffPath.endsWith('.xlsx')) return toText(bytes);
+      const id = /^fixtures\/([^/]+)\.xlsx$/.exec(diffPath)?.[1];
+      if (!id) return 'Binary spreadsheet file';
+      try {
+        const value = await readTable(new Map([[diffPath, bytes!]]), id);
+        return JSON.stringify({ columns: value.columns, rows: value.rows }, null, 2);
+      } catch { return 'Unable to display spreadsheet contents'; }
+    }
+    Promise.all([render(pending.baseline.get(diffPath)), render(pending.files.get(diffPath))]).then(([original, modified]) => { if (active) setDiffTexts({ original, modified }); });
+    return () => { active = false; };
+  }, [pending, diffPath]);
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.source !== frameRef.current?.contentWindow || event.data?.token !== tokenRef.current) return;
+      const message = event.data;
+      if (message.kind === 'preview.error') { setNotice(`Preview: ${message.message}`); return; }
+      if (message.kind !== 'table.request') return;
+      const reply = (ok: boolean, value?: unknown, error?: string) => frameRef.current?.contentWindow?.postMessage({ token: tokenRef.current, id: message.id, ok, value, error }, '*');
+      const task = async () => {
+      try {
+        if (!['list', 'insert', 'update', 'remove'].includes(message.op) || !/^[a-z0-9_-]{1,60}$/i.test(message.table)) throw new Error('Invalid table request');
+        if (JSON.stringify(message.payload ?? '').length > 200_000) throw new Error('Table request is too large');
+        const workspace = workspaceRef.current!;
+        const current = await readTable(workspace.files, message.table);
+        if (message.op === 'list') { reply(true, current.rows); return; }
+        if (current.rows.length >= 10_000 && message.op === 'insert') throw new Error('Table is full');
+        let value: Row | undefined;
+        if (message.op === 'insert') {
+          if (!message.payload || typeof message.payload !== 'object') throw new Error('Invalid row');
+          value = { ...message.payload, id: message.payload.id || crypto.randomUUID() };
+          current.rows.push(value!);
+        } else {
+          const index = current.rows.findIndex(row => String(row.id) === String(message.payload?.id));
+          if (index < 0) throw new Error('Row not found');
+          if (message.op === 'update') { current.rows[index] = { ...current.rows[index], ...message.payload.patch }; value = current.rows[index]; }
+          if (message.op === 'remove') value = current.rows.splice(index, 1)[0];
+        }
+        await workspace.write(current.path, await tableBytes(current));
+        setFiles(workspace.snapshot());
+        reply(true, value);
+        frameRef.current?.contentWindow?.postMessage({ kind: 'table.changed', table: message.table, token: tokenRef.current }, '*');
+      } catch (error) { const message = String(error instanceof Error ? error.message : error); reply(false, undefined, message); setNotice(`Table write failed: ${message}`); }
+      };
+      bridgeQueueRef.current = bridgeQueueRef.current.then(task, task);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  const flash = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 4200); };
+  const notifyTable = (path: string) => {
+    const id = /^fixtures\/([^/]+)\.(csv|xlsx)$/.exec(path)?.[1];
+    if (id) frameRef.current?.contentWindow?.postMessage({ kind: 'table.changed', table: id, token: tokenRef.current }, '*');
+  };
+
+  async function saveFile(path: string, content: string) {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    setFiles(new Map(files).set(path, toBytes(content)));
+    try { await workspace.write(path, toBytes(content)); setFiles(workspace.snapshot()); notifyTable(path); }
+    catch (error) { flash(String(error)); }
+  }
+
+  async function sendPrompt() {
+    const text = prompt.trim();
+    if (!text || busy) return;
+    if (!key.trim()) { setSettingsOpen(true); return; }
+    if (pending) { flash('Review the pending change before starting another agent turn.'); return; }
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const stage = workspace.stage();
+    const answerId = crypto.randomUUID();
+    setPrompt(''); setBusy(true);
+    setChat(current => [...current, { id: crypto.randomUUID(), role: 'user', text, time: new Date().toISOString() }, { id: answerId, role: 'assistant', text: '', time: new Date().toISOString() }]);
+    try {
+      const outcome = await runAgent(text, key.trim(), modelId.trim(), stage, history, {
+        onText: value => setChat(current => current.map(line => line.id === answerId ? { ...line, text: value } : line)),
+        onTool: line => setTools(current => [...current.filter(item => item.id !== line.id), line]),
+      });
+      setChat(current => current.map(line => line.id === answerId ? { ...line, text: outcome.text || 'Done.' } : line));
+      setHistory(outcome.messages);
+      if (stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
+    } catch (error) {
+      setChat(current => current.map(line => line.id === answerId ? { ...line, text: `Agent error: ${String(error instanceof Error ? error.message : error)}` } : line));
+      if (stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
+    } finally { setBusy(false); }
+  }
+
+  async function acceptStage() {
+    const workspace = workspaceRef.current;
+    if (!workspace || !pending) return;
+    if (workspace.revision !== pending.baseRevision) { flash('The project changed during this turn. Revert the staged change and ask the agent to retry.'); return; }
+    await workspace.replace(pending.files);
+    for (const path of pending.changes()) notifyTable(path);
+    setFiles(workspace.snapshot()); setPending(null); setDiffOpen(false); flash('Agent changes accepted.');
+  }
+
+  function rejectStage() { setPending(null); setDiffOpen(false); flash('Agent changes discarded.'); }
+
+  async function importProject(file: File) {
+    try {
+      const imported = await importZip(file);
+      await workspaceRef.current!.replace(imported.files);
+      setFiles(workspaceRef.current!.snapshot()); setSelected('index.html'); setSelectedTableId(fixtureIds(imported.files)[0] || 'todos'); setChat(imported.chat); setTools(imported.tools); setHistory([]); setPending(null); setTab('files');
+      flash('Project imported.');
+    } catch (error) { flash(String(error instanceof Error ? error.message : error)); }
+  }
+
+  async function exportProject() {
+    try { downloadBlob(await exportZip(workspaceRef.current!.files, chat, tools), 'project-studio-export.zip'); flash('ZIP exported.'); }
+    catch (error) { flash(String(error instanceof Error ? error.message : error)); }
+  }
+
+  async function resetProject() {
+    if (!window.confirm('Replace this project with a fresh to-do template? Export first if you want to keep your work.')) return;
+    const next = new Map(Object.entries(templateFiles).map(([path, value]) => [path, toBytes(value)]));
+    await workspaceRef.current!.replace(next);
+    setFiles(workspaceRef.current!.snapshot()); setChat([]); setTools([]); setHistory([]); setPending(null); setSelected('app.js'); setSelectedTableId('todos'); flash('Fresh to-do project created.');
+  }
+
+  async function createNewItem() {
+    const name = newItemName.trim();
+    if (newItem === 'file') {
+      if (!validPath(name) || files.has(name)) { flash('Choose a valid new project path.'); return; }
+      await workspaceRef.current!.write(name, toBytes(''));
+      setFiles(workspaceRef.current!.snapshot()); setSelected(name); setTab('files'); setView('code');
+    } else if (newItem === 'table') {
+      const id = name.toLowerCase();
+      if (!/^[a-z0-9_-]{1,60}$/.test(id) || fixtureIds(files).includes(id)) { flash('Choose a new table name using letters, numbers, hyphens, or underscores.'); return; }
+      const next: Table = { path: `fixtures/${id}.csv`, format: 'csv', columns: ['id', 'name'], rows: [] };
+      await workspaceRef.current!.write(next.path, await tableBytes(next));
+      setFiles(workspaceRef.current!.snapshot()); setSelectedTableId(id); setTab('data');
+    }
+    setNewItem(null); setNewItemName('');
+  }
+
+  async function saveTable() {
+    if (!table) return;
+    try { await workspaceRef.current!.write(table.path, await tableBytes(table)); setFiles(workspaceRef.current!.snapshot()); notifyTable(table.path); flash('Table saved to project file.'); }
+    catch (error) { flash(String(error)); }
+  }
+
+  async function importTable(file: File) {
+    const match = /^([a-z0-9_-]{1,60})\.(csv|xlsx)$/i.exec(file.name);
+    if (!match) { flash('Use a CSV or XLSX filename with letters, numbers, hyphens, or underscores.'); return; }
+    const id = match[1].toLowerCase();
+    const path = `fixtures/${id}.${match[2].toLowerCase()}`;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    try {
+      if (bytes.byteLength > 20_000_000) throw new Error('Fixture is larger than 20 MB');
+      await readTable(new Map([[path, bytes]]), id);
+      const workspace = workspaceRef.current!;
+      for (const existing of [`fixtures/${id}.csv`, `fixtures/${id}.xlsx`]) if (existing !== path && workspace.files.has(existing)) await workspace.remove(existing);
+      await workspace.write(path, bytes);
+      notifyTable(path);
+      setFiles(workspace.snapshot()); setSelectedTableId(id); setTab('data');
+      flash(`Imported ${id}.${match[2].toLowerCase()}.`);
+    } catch (error) { flash(String(error instanceof Error ? error.message : error)); }
+  }
+
+  async function convertTable() {
+    if (!table) return;
+    try {
+      const nextPath = table.path.replace(/\.(csv|xlsx)$/, table.format === 'csv' ? '.xlsx' : '.csv');
+      const converted: Table = { ...table, path: nextPath, format: table.format === 'csv' ? 'xlsx' : 'csv' };
+      const bytes = await tableBytes(converted);
+      await workspaceRef.current!.remove(table.path);
+      await workspaceRef.current!.write(nextPath, bytes);
+      notifyTable(nextPath);
+      setFiles(workspaceRef.current!.snapshot()); flash(`Converted table to ${converted.format.toUpperCase()}.`);
+    } catch (error) { flash(String(error)); }
+  }
+
+  const filePaths = [...files.keys()].sort((a, b) => a.localeCompare(b));
+  const selectedBytes = files.get(selected);
+  const selectedText = selectedBytes && !selected.endsWith('.xlsx') ? toText(selectedBytes) : '';
+  const changed = pending?.changes() || [];
+  const tableIds = fixtureIds(files);
+
+  return <div className="studio">
+    <header className="topbar">
+      <div className="brand"><div className="brand-mark"><LayoutPanelLeft size={18} strokeWidth={2.4} /></div><span>Workbench</span><span className="brand-beta">BETA</span></div>
+      <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state">{ready ? 'Saved locally' : 'Opening…'}</span></div>
+      <div className="topbar-actions">
+        <button className="text-button" onClick={() => importRef.current?.click()} title="Import ZIP"><FolderOpen size={16} /> Import</button>
+        <button className="text-button" onClick={exportProject} title="Export project and chat"><ArrowDownToLine size={16} /> Export ZIP</button>
+        {!rightOpen && <button className="top-icon mobile-agent-button" onClick={() => setRightOpen(true)} title="Open agent"><Sparkles size={17} /></button>}
+        <button className="top-icon" onClick={() => setSettingsOpen(true)} title="Model settings"><KeyRound size={17} /></button>
+        <input ref={importRef} type="file" accept=".zip" hidden onChange={event => { const file = event.target.files?.[0]; if (file) importProject(file); event.target.value = ''; }} />
+        <input ref={tableImportRef} type="file" accept=".csv,.xlsx" hidden onChange={event => { const file = event.target.files?.[0]; if (file) importTable(file); event.target.value = ''; }} />
+      </div>
+    </header>
+
+    <div className="work-area">
+      <aside className="left-rail">
+        <div className="rail-tabs"><button className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')}><Code2 size={16} /> Files</button><button className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}><FileSpreadsheet size={16} /> Data</button></div>
+        <div className="rail-heading"><span>{tab === 'files' ? 'PROJECT FILES' : 'FIXTURE TABLES'}</span><button onClick={() => { setNewItem(tab === 'files' ? 'file' : 'table'); setNewItemName(''); }} title={tab === 'files' ? 'New file' : 'New table'}><FilePlus2 size={15} /></button></div>
+        {tab === 'files' ? <div className="file-list">{filePaths.map(path => <button key={path} className={`file-item ${selected === path ? 'selected' : ''}`} onClick={() => { setSelected(path); setView('code'); }}>{iconFor(path)} <span>{path}</span></button>)}</div> : <div className="data-list">{tableIds.map(id => <button key={id} className={`data-item ${selectedTableId === id ? 'selected' : ''}`} onClick={() => setSelectedTableId(id)}><span className="data-icon"><FileSpreadsheet size={16} /></span><span><strong>{id}</strong><small>{id === selectedTableId && table ? `${table.rows.length} rows · ${table.format.toUpperCase()}` : (files.has(`fixtures/${id}.xlsx`) ? 'XLSX' : 'CSV')}</small></span></button>)}<button className="import-fixture" onClick={() => tableImportRef.current?.click()}><Plus size={14} /> Import CSV / XLSX</button><p>Table data lives in the project and travels with your ZIP.</p></div>}
+        <div className="rail-bottom"><button onClick={resetProject}><RotateCcw size={15} /> Reset template</button><span>Browser workspace · v0.1</span></div>
+      </aside>
+
+      <main className="main-pane">
+        <div className="main-toolbar">
+          <div className="file-breadcrumb"><span className="crumb-dim">project</span><span>/</span><strong>{tab === 'data' ? `fixtures / ${selectedTableId}` : selected}</strong>{tab === 'files' && selectedBytes && <span className="file-size">{(selectedBytes.byteLength / 1024).toFixed(1)} KB</span>}</div>
+          <div className="view-switch">{tab === 'files' && <><button className={view === 'code' ? 'selected' : ''} onClick={() => setView('code')} title="Code"><Code2 size={15} /></button><button className={view === 'split' ? 'selected' : ''} onClick={() => setView('split')} title="Split"><LayoutPanelLeft size={15} /></button><button className={view === 'preview' ? 'selected' : ''} onClick={() => setView('preview')} title="Preview"><Play size={15} /></button></>}<button onClick={() => setPreviewVersion(v => v + 1)} title="Reload preview"><RefreshCw size={15} /></button></div>
+        </div>
+
+        {tab === 'files' ? <div className={`workspace-split ${view}`}>
+          {view !== 'preview' && <section className="editor-pane"><div className="pane-label"><span className="pane-icon">{iconFor(selected)}</span>{selected}<span className="pane-meta">{selected.endsWith('.xlsx') ? 'BINARY' : language(selected).toUpperCase()}</span></div>{selected.endsWith('.xlsx') ? <div className="binary-note">This spreadsheet is edited in the Data tab.</div> : <Editor path={selected} language={language(selected)} value={selectedText} theme="vs-dark" onChange={value => saveFile(selected, value ?? '')} options={{ minimap: { enabled: false }, fontSize: 12, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace', lineHeight: 21, padding: { top: 20 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, renderLineHighlight: 'line', overviewRulerBorder: false }} />}</section>}
+          {view !== 'code' && <section className="preview-pane"><div className="pane-label"><span className="preview-live"><span /> LIVE PREVIEW</span><span className="preview-address">index.html</span><button onClick={() => setPreviewVersion(v => v + 1)} title="Reload preview"><RefreshCw size={14} /></button></div><div className="preview-canvas">{previewDoc ? <iframe ref={frameRef} key={previewBuildId} title="Project preview" sandbox="allow-scripts allow-forms" srcDoc={previewDoc} /> : <span className="preview-loading">Preparing preview…</span>}</div></section>}
+        </div> : <section className="table-pane"><div className="table-top"><div><span className="section-kicker">FIXTURE EDITOR</span><h2>{selectedTableId} <span>{table?.rows.length || 0} rows</span></h2><p>Changes are saved to the project file and reflected in the preview.</p></div><div className="table-actions"><button onClick={() => tableImportRef.current?.click()}>Import CSV / XLSX</button><button onClick={convertTable} disabled={!table}>Convert to {table?.format === 'csv' ? 'XLSX' : 'CSV'}</button><button className="primary-small" onClick={saveTable} disabled={!table}><Check size={14} /> Save table</button></div></div>{table ? <><div className="fixture-generator"><span>Generate rows</span><label>Seed <input type="number" value={generationSeed} onChange={event => setGenerationSeed(Number(event.target.value))} /></label><label>Count <input type="number" min="1" max="100" value={generationCount} onChange={event => setGenerationCount(Number(event.target.value))} /></label><button onClick={() => setTable(current => current && ({ ...current, rows: generateRows(current, generationSeed, generationCount) }))}>Generate</button><small>Preview first, then save.</small></div><div className="table-scroll"><table><thead><tr>{table.columns.map(column => <th key={column}>{column}</th>)}<th /></tr></thead><tbody>{table.rows.map((row, index) => <tr key={String(row.id || index)}>{table.columns.map(column => <td key={column}>{column === 'completed' ? <input type="checkbox" checked={Boolean(row[column])} onChange={event => setTable(current => current && ({ ...current, rows: current.rows.map((item, i) => i === index ? { ...item, [column]: event.target.checked } : item) }))} /> : <input value={String(row[column] ?? '')} onChange={event => setTable(current => current && ({ ...current, rows: current.rows.map((item, i) => i === index ? { ...item, [column]: event.target.value } : item) }))} />}</td>)}<td><button className="row-delete" onClick={() => setTable(current => current && ({ ...current, rows: current.rows.filter((_, i) => i !== index) }))}><Trash2 size={14} /></button></td></tr>)}</tbody></table></div><button className="add-row" onClick={() => setTable(current => current && ({ ...current, rows: [...current.rows, Object.fromEntries(current.columns.map(column => [column, column === 'id' ? crypto.randomUUID() : column === 'completed' ? false : column === 'created_at' ? new Date().toISOString() : '']))] }))}><Plus size={15} /> Add row</button></> : <div className="table-empty">No `{selectedTableId}` fixture in this project.</div>}</section>}
+      </main>
+
+      {rightOpen ? <aside className="agent-pane"><div className="agent-header"><div><div className="agent-title"><Sparkles size={16} /> Agent</div><span>Build with your workspace</span></div><button onClick={() => setRightOpen(false)} title="Hide agent"><PanelRightClose size={18} /></button></div>
+        <div className="agent-scroll">
+          {!chat.length && <div className="empty-chat"><div className="empty-chat-icon"><MessageSquareText size={21} /></div><h2>What should we make?</h2><p>Ask the agent to shape your project. Every file change is yours to review.</p><div className="suggestions"><button onClick={() => setPrompt('Add a priority field to tasks and show high-priority tasks first.')}>Add task priorities <ArrowRight size={14} /></button><button onClick={() => setPrompt('Make the to-do app work well on small screens.')}>Improve mobile layout <ArrowRight size={14} /></button><button onClick={() => setPrompt('Add a filter for all, open, and completed tasks.')}>Add task filters <ArrowRight size={14} /></button></div></div>}
+          {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
+          {tools.length > 0 && <div className="tool-activity"><span>RECENT ACTIVITY</span>{tools.slice(-5).map(line => <div key={line.id}><span className={line.status === 'error' ? 'tool-error' : 'tool-check'}>{line.status === 'error' ? '!' : '✓'}</span><strong>{line.name.replaceAll('_', ' ')}</strong><small>{line.summary}</small></div>)}</div>}
+          {pending && <div className="pending-card"><div className="pending-top"><span><span className="pending-dot" /> REVIEW CHANGES</span><strong>{changed.length} {changed.length === 1 ? 'file' : 'files'}</strong></div><div className="pending-files">{changed.map(path => <button key={path} onClick={() => { setDiffPath(path); setDiffOpen(true); }}>{iconFor(path)} {path} <ArrowRight size={13} /></button>)}</div><div className="pending-actions"><button onClick={rejectStage}>Discard</button><button className="accept" onClick={acceptStage}><Check size={14} /> Accept changes</button></div></div>}
+          <div ref={bottomRef} />
+        </div>
+        <div className="composer"><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><button className="model-button" onClick={() => setSettingsOpen(true)}><span className={key ? 'model-dot ready' : 'model-dot'} /> {key ? modelId.split('/').at(-1) : 'Add OpenRouter key'} <ChevronDown size={13} /></button><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p>Agent changes are staged for your review.</p></div>
+      </aside> : <button className="agent-reopen" onClick={() => setRightOpen(true)}><Sparkles size={17} /> Agent</button>}
+    </div>
+
+    {settingsOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">MODEL CONNECTION</span><h2>OpenRouter</h2></div><button onClick={() => setSettingsOpen(false)}><X size={20} /></button></div><p>Use your own API key for agent conversations. It stays in this tab and is never added to project files or ZIP exports.</p><label>API key<input type="password" value={key} placeholder="sk-or-v1-…" onChange={event => setKey(event.target.value)} autoComplete="off" /></label><label>Model ID<input value={modelId} onChange={event => setModelId(event.target.value)} spellCheck={false} /></label><div className="modal-actions"><button onClick={() => setSettingsOpen(false)}>Close</button><button className="primary-small" onClick={() => setSettingsOpen(false)}><Check size={15} /> Save for this tab</button></div></div></div>}
+
+    {newItem && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setNewItem(null); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">PROJECT WORKSPACE</span><h2>New {newItem}</h2></div><button onClick={() => setNewItem(null)} title="Close"><X size={20} /></button></div><p>{newItem === 'file' ? 'Enter a project-relative path, such as about.html.' : 'Enter a table name. A CSV with id and name columns will be created.'}</p><label>{newItem === 'file' ? 'File path' : 'Table name'}<input autoFocus value={newItemName} onChange={event => setNewItemName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createNewItem(); }} placeholder={newItem === 'file' ? 'about.html' : 'products'} /></label><div className="modal-actions"><button onClick={() => setNewItem(null)}>Cancel</button><button className="primary-small" onClick={createNewItem}><Plus size={15} /> Create</button></div></div></div>}
+
+    {diffOpen && pending && <div className="diff-backdrop"><div className="diff-modal"><div className="diff-head"><div><span className="section-kicker">REVIEW AGENT CHANGES</span><h2>{diffPath}</h2></div><div><select value={diffPath} onChange={event => setDiffPath(event.target.value)}>{changed.map(path => <option key={path}>{path}</option>)}</select><button onClick={() => setDiffOpen(false)}><X size={19} /></button></div></div><div className="diff-editor"><DiffEditor original={diffTexts.original} modified={diffTexts.modified} language={diffPath.endsWith('.xlsx') ? 'json' : language(diffPath)} theme="vs-dark" options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, renderSideBySide: true, automaticLayout: true }} /></div><div className="diff-footer"><button onClick={rejectStage}>Discard changes</button><button className="primary-small" onClick={acceptStage}><Check size={15} /> Accept {changed.length} {changed.length === 1 ? 'file' : 'files'}</button></div></div></div>}
+    {notice && <div className="toast"><span>{notice}</span><button onClick={() => setNotice('')}><X size={14} /></button></div>}
+  </div>;
+}
+
+const rootElement = document.getElementById('root')! as HTMLElement & { __studioRoot?: Root };
+const root = rootElement.__studioRoot ||= createRoot(rootElement);
+root.render(<App />);

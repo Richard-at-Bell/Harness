@@ -1,0 +1,35 @@
+{
+  "name": "browser-project-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.87.1",
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@monaco-editor/react": "^4.7.0",
+    "@sinclair/typebox": "^0.34.0",
+    "@zip.js/zip.js": "^2.8.0",
+    "exceljs": "^4.4.0",
+    "idb": "^8.0.0",
+    "lucide-react": "^0.468.0",
+    "monaco-editor": "^0.55.1",
+    "papaparse": "^5.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.3.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^5.0.2"
+  }
+}

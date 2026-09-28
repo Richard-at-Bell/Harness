@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Today — a small to-do list</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar"><span class="wordmark">TODAY<span class="mark">.</span></span><span class="topbar-note">A little space to get things done</span></header>
+    <section class="intro"><div class="eyebrow">YOUR LIST</div><h1>Make room for<br /><em>what matters.</em></h1><p>One task at a time. The rest can wait.</p></section>
+    <section class="task-area" aria-label="Tasks">
+      <form id="task-form" class="task-form"><input id="new-task" type="text" placeholder="Add something to do..." aria-label="New task" required /><button type="submit" aria-label="Add task">Add <span>↗</span></button></form>
+      <div class="task-heading"><h2>Tasks <span id="open-count">0</span></h2><span id="status">Loading your list…</span></div>
+      <div id="task-list" class="task-list"></div>
+    </section>
+    <footer><span>Small steps still move you forward.</span><button id="download-table" type="button">Download tasks CSV</button></footer>
+  </main>
+  <script src="fixture-seed.js"></script>
+  <script src="data-store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
