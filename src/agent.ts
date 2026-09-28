@@ -3,6 +3,7 @@ import { createModels, Type, contentText } from '@earendil-works/pi-ai';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
 import { readTable, tableBytes, type Row } from './fixtures';
 import { DEFAULT_MODEL } from './models';
+import { finishedTool, startedTool } from './toolActivity';
 import type { Stage, ToolLine } from './workspace';
 import { toText } from './workspace';
 
@@ -105,13 +106,23 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
     toolExecution: 'sequential',
   });
   let streamed = '';
+  const activeTools = new Map<string, { line: ToolLine; started: number }>();
   agent.subscribe(event => {
     if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
       streamed += event.assistantMessageEvent.delta;
       callbacks.onText(streamed);
     }
-    if (event.type === 'tool_execution_start') callbacks.onTool({ id: event.toolCallId, time: new Date().toISOString(), name: event.toolName, status: 'started', summary: typeof event.args?.path === 'string' ? event.args.path : typeof event.args?.table === 'string' ? `fixtures/${event.args.table}` : 'Workspace' });
-    if (event.type === 'tool_execution_end') callbacks.onTool({ id: event.toolCallId, time: new Date().toISOString(), name: event.toolName, status: event.isError ? 'error' : 'ok', summary: event.isError ? 'Tool failed' : 'Completed' });
+    if (event.type === 'tool_execution_start') {
+      const line = startedTool(event.toolCallId, event.toolName, event.args || {}, new Date().toISOString());
+      activeTools.set(event.toolCallId, { line, started: performance.now() });
+      callbacks.onTool(line);
+    }
+    if (event.type === 'tool_execution_end') {
+      const active = activeTools.get(event.toolCallId);
+      const line = active?.line || startedTool(event.toolCallId, event.toolName, {}, new Date().toISOString());
+      callbacks.onTool(finishedTool(line, event.isError, event.result, Math.max(0, Math.round(performance.now() - (active?.started ?? performance.now())))));
+      activeTools.delete(event.toolCallId);
+    }
   });
   await agent.prompt(prompt);
   const last = [...agent.state.messages].reverse().find(message => message.role === 'assistant');

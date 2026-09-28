@@ -49,3 +49,51 @@
   .topbar-actions .text-button svg { width: 16px; height: 16px; }
 }
 @media (max-width: 600px) { .model-options { grid-template-columns: 1fr; } }
+
+.diff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 43px; padding: 5px 16px; border-top: 1px solid #303a3a; border-bottom: 1px solid #303a3a; background: #20272b; }
+.diff-legend, .diff-controls { display: flex; align-items: center; gap: 7px; }
+.diff-legend { min-width: 0; flex-wrap: wrap; }
+.diff-legend > span { font-size: 10px; font-weight: 700; white-space: nowrap; }
+.diff-added { color: #8ae0ae; background: #25533b; border: 1px solid #3d805c; border-radius: 3px; padding: 3px 6px; }
+.diff-removed { color: #f0a5a7; background: #593136; border: 1px solid #8d4a50; border-radius: 3px; padding: 3px 6px; }
+.diff-count { color: #aebbb1; margin-left: 6px; }
+.diff-controls { flex: none; }
+.diff-controls > button, .diff-mode button { height: 27px; border: 1px solid #4a5751; border-radius: 4px; background: #2a3335; color: #c7d2c7; font-size: 10px; font-weight: 700; cursor: pointer; }
+.diff-controls > button { width: 28px; display: grid; place-items: center; }
+.diff-controls button:disabled { opacity: .35; cursor: default; }
+.diff-mode { display: flex; margin-right: 5px; }
+.diff-mode button { padding: 0 9px; border-radius: 0; }
+.diff-mode button:first-child { border-radius: 4px 0 0 4px; }
+.diff-mode button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+.diff-mode button.selected { color: #e5f3dc; background: #3d523d; border-color: #72916b; }
+.diff-editor .monaco-diff-editor { --vscode-diffEditor-border: #4c6056; }
+
+.tool-activity { margin: 0 0 20px 36px; padding: 10px 0 0; border-top: 1px solid #31373c; }
+.tool-activity > .activity-body { display: block; margin-top: 0; }
+.activity-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 0 2px 8px 0; background: none; border: 0; color: #9db89e; cursor: pointer; text-align: left; }
+.activity-toggle > span { font-size: 9px; font-weight: 800; letter-spacing: .1em; }
+.activity-toggle small { margin-left: 5px; color: #74847a; font-size: 9px; font-weight: 600; letter-spacing: 0; }
+.activity-body { padding-right: 1px; }
+.activity-filters { display: flex; gap: 5px; margin: 3px 0 7px; }
+.activity-filters button, .activity-more { background: none; border: 0; border-radius: 3px; color: #829189; font-size: 9px; font-weight: 700; cursor: pointer; }
+.activity-filters button { padding: 4px 7px; }
+.activity-filters button.selected { background: #2c3c35; color: #c7e2c5; }
+.activity-list { border: 1px solid #343f3d; border-radius: 5px; overflow: hidden; }
+.activity-item + .activity-item { border-top: 1px solid #343f3d; }
+.activity-item > summary { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 7px; list-style: none; color: #c3d0c4; font-size: 10px; cursor: pointer; }
+.activity-item > summary::-webkit-details-marker { display: none; }
+.activity-item > summary:hover, .activity-item[open] > summary { background: #28332f; }
+.activity-status { flex: none; width: 14px; height: 14px; display: grid; place-items: center; border-radius: 50%; background: #34523d; color: #a6e4af; font-size: 10px; font-weight: 800; }
+.activity-item.error .activity-status { background: #58343b; color: #f2a2a8; }
+.activity-item.started .activity-status { background: #554e33; color: #e8cd88; }
+.activity-name { flex: none; font-weight: 700; text-transform: capitalize; }
+.activity-target { min-width: 0; margin-left: auto; color: #8d9e91; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-chevron { flex: none; color: #87978a; transition: transform .15s ease; }
+.activity-item[open] .activity-chevron { transform: rotate(180deg); }
+.activity-debug { display: grid; gap: 6px; padding: 8px 9px 10px 28px; background: #1c2727; border-top: 1px solid #35433d; }
+.activity-debug > div { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 6px; font-size: 10px; line-height: 1.35; }
+.activity-debug span { color: #85978a; }
+.activity-debug strong, .activity-debug code { min-width: 0; color: #cbd9cc; font-size: 10px; font-weight: 600; text-transform: none; overflow-wrap: anywhere; }
+.activity-empty { padding: 8px 4px; color: #809185; font-size: 10px; }
+.activity-more { margin-top: 7px; padding: 4px 0; color: #afd59c; }
+@media (max-width: 600px) { .diff-toolbar { align-items: flex-start; flex-direction: column; padding: 8px 12px; } .diff-controls { width: 100%; justify-content: flex-end; } .diff-head { padding: 12px; } .diff-head h2 { font-size: 14px; } }

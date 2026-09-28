@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import Editor, { DiffEditor, loader } from '@monaco-editor/react';
+import Editor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
@@ -9,6 +9,8 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { ArrowDownToLine, ArrowRight, Check, ChevronDown, Code2, FileCode2, FilePlus2, FileSpreadsheet, FolderOpen, KeyRound, LayoutPanelLeft, MessageSquareText, PanelRightClose, Play, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { DEFAULT_MODEL, runAgent } from './agent';
+import { ActivityPanel } from './ActivityPanel';
+import { DiffReview } from './DiffReview';
 import { loadLiveModels, MODEL_CHOICES, modelName, pricePerMillion, type LiveModel } from './models';
 import { downloadBlob, exportZip, importZip } from './export';
 import { fixtureIds, generateRows, readTable, tableBytes, type Row, type Table } from './fixtures';
@@ -75,7 +77,7 @@ function App() {
   const [pending, setPending] = useState<Stage | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffPath, setDiffPath] = useState('');
-  const [diffTexts, setDiffTexts] = useState({ original: '', modified: '' });
+  const [diffTexts, setDiffTexts] = useState<{ stage: Stage | null; path: string; original: string; modified: string }>({ stage: null, path: '', original: '', modified: '' });
   const [table, setTable] = useState<Table | null>(null);
   const [selectedTableId, setSelectedTableId] = useState('todos');
   const [generationSeed, setGenerationSeed] = useState(42);
@@ -143,7 +145,7 @@ function App() {
         return JSON.stringify({ columns: value.columns, rows: value.rows }, null, 2);
       } catch { return 'Unable to display spreadsheet contents'; }
     }
-    Promise.all([render(pending.baseline.get(diffPath)), render(pending.files.get(diffPath))]).then(([original, modified]) => { if (active) setDiffTexts({ original, modified }); });
+    Promise.all([render(pending.baseline.get(diffPath)), render(pending.files.get(diffPath))]).then(([original, modified]) => { if (active) setDiffTexts({ stage: pending, path: diffPath, original, modified }); });
     return () => { active = false; };
   }, [pending, diffPath]);
 
@@ -358,7 +360,7 @@ function App() {
         <div className="agent-scroll">
           {!chat.length && <div className="empty-chat"><div className="empty-chat-icon"><MessageSquareText size={21} /></div><h2>What should we make?</h2><p>Ask the agent to shape your project. Every file change is yours to review.</p><div className="suggestions"><button onClick={() => setPrompt('Add a priority field to tasks and show high-priority tasks first.')}>Add task priorities <ArrowRight size={14} /></button><button onClick={() => setPrompt('Make the to-do app work well on small screens.')}>Improve mobile layout <ArrowRight size={14} /></button><button onClick={() => setPrompt('Add a filter for all, open, and completed tasks.')}>Add task filters <ArrowRight size={14} /></button></div></div>}
           {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : line.model ? modelName(line.model) : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
-          {tools.length > 0 && <div className="tool-activity"><span>RECENT ACTIVITY</span>{tools.slice(-5).map(line => <div key={line.id}><span className={line.status === 'error' ? 'tool-error' : 'tool-check'}>{line.status === 'error' ? '!' : '✓'}</span><strong>{line.name.replaceAll('_', ' ')}</strong><small>{line.summary}</small></div>)}</div>}
+          <ActivityPanel tools={tools} />
           {pending && <div className="pending-card"><div className="pending-top"><span><span className="pending-dot" /> REVIEW CHANGES</span><strong>{changed.length} {changed.length === 1 ? 'file' : 'files'}</strong></div><div className="pending-files">{changed.map(path => <button key={path} onClick={() => { setDiffPath(path); setDiffOpen(true); }}>{iconFor(path)} {path} <ArrowRight size={13} /></button>)}</div><div className="pending-actions"><button onClick={rejectStage}>Discard</button><button className="accept" onClick={acceptStage}><Check size={14} /> Accept changes</button></div></div>}
           <div ref={bottomRef} />
         </div>
@@ -391,7 +393,7 @@ function App() {
 
     {newItem && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setNewItem(null); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">PROJECT WORKSPACE</span><h2>New {newItem}</h2></div><button onClick={() => setNewItem(null)} title="Close"><X size={20} /></button></div><p>{newItem === 'file' ? 'Enter a project-relative path, such as about.html.' : 'Enter a table name. A CSV with id and name columns will be created.'}</p><label>{newItem === 'file' ? 'File path' : 'Table name'}<input autoFocus value={newItemName} onChange={event => setNewItemName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createNewItem(); }} placeholder={newItem === 'file' ? 'about.html' : 'products'} /></label><div className="modal-actions"><button onClick={() => setNewItem(null)}>Cancel</button><button className="primary-small" onClick={createNewItem}><Plus size={15} /> Create</button></div></div></div>}
 
-    {diffOpen && pending && <div className="diff-backdrop"><div className="diff-modal"><div className="diff-head"><div><span className="section-kicker">REVIEW AGENT CHANGES</span><h2>{diffPath}</h2></div><div><select value={diffPath} onChange={event => setDiffPath(event.target.value)}>{changed.map(path => <option key={path}>{path}</option>)}</select><button onClick={() => setDiffOpen(false)}><X size={19} /></button></div></div><div className="diff-editor"><DiffEditor original={diffTexts.original} modified={diffTexts.modified} language={diffPath.endsWith('.xlsx') ? 'json' : language(diffPath)} theme="vs-dark" options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, renderSideBySide: true, automaticLayout: true }} /></div><div className="diff-footer"><button onClick={rejectStage}>Discard changes</button><button className="primary-small" onClick={acceptStage}><Check size={15} /> Accept {changed.length} {changed.length === 1 ? 'file' : 'files'}</button></div></div></div>}
+    {diffOpen && pending && diffTexts.stage === pending && diffTexts.path === diffPath && <DiffReview key={diffPath} path={diffPath} paths={changed} original={diffTexts.original} modified={diffTexts.modified} language={diffPath.endsWith('.xlsx') ? 'json' : language(diffPath)} onPathChange={setDiffPath} onClose={() => setDiffOpen(false)} onDiscard={rejectStage} onAccept={acceptStage} />}
     {notice && <div className="toast"><span>{notice}</span><button onClick={() => setNotice('')}><X size={14} /></button></div>}
   </div>;
 }
