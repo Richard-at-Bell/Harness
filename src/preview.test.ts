@@ -10,7 +10,7 @@ describe('live preview', () => {
       ['app.js', toBytes('window.ready=true')],
       ['icon.png', new Uint8Array([137, 80, 78, 71])],
     ]);
-    const doc = await buildPreview(files, 'test-token');
+    const doc = await buildPreview(files, new Map(), 'test-token');
     expect(doc).toContain('test-token');
     expect(doc).toContain('window.ready=true');
     expect(doc).toContain('data:image/png;base64,');

@@ -21,9 +21,9 @@ The Vite output in `dist/` is a static site suitable for Vercel. No server API i
 ## Current milestone
 
 - Edit project files in Monaco and see an isolated live preview.
-- Chat with an agent whose file and table edits are staged in a diff before acceptance.
-- Edit, import, convert, and generate CSV/XLSX fixture tables. Preview table changes update the project fixture file.
-- Export a ZIP with `project/`, `manifest.json`, `studio/chat.jsonl`, and `studio/tool-events.jsonl`; reimport a studio or plain project ZIP.
+- Keep multiple agent chats, each with its own model, context, and activity log. File and table edits are staged in a diff before acceptance.
+- Edit, import, convert, and generate CSV/XLSX fixture tables in Studio data. Preview table changes update Studio fixtures, separate from authored project files.
+- Export a ZIP with `project/`, `studio/fixtures/`, all chats and tool logs, and `manifest.json`; reimport a studio or plain project ZIP.
 - Run the exported project from a static server. Its data adapter persists changes to that browser's local storage and offers a CSV download, because a static site cannot rewrite source files on disk.
 
 The design documents and open decisions are in [docs/README.md](docs/README.md). [Implementation status](docs/implementation-status.md) distinguishes working features from planned seams.

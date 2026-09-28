@@ -9,5 +9,6 @@ export const templateFiles: Record<string, string> = {
   'styles.css': css,
   'app.js': app,
   'data-store.js': adapter,
-  'fixtures/todos.csv': csv,
 };
+
+export const templateFixtures: Record<string, string> = { 'fixtures/todos.csv': csv };

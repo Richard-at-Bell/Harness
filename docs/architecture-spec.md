@@ -9,20 +9,21 @@ Vercel static assets
   └─ TypeScript studio application
        ├─ Monaco editor + diff view
        ├─ chat and Pi agent loop
-       ├─ workspace service ── OPFS source files
-       │                    └─ IndexedDB metadata, checkpoints, sessions
-       ├─ fixture service ── normalized tables ↔ CSV/XLSX files
+       ├─ workspace service ── OPFS project files
+       │                    └─ OPFS Studio fixture files
+       ├─ chat store ── IndexedDB conversations and active chat
+       ├─ fixture service ── normalized tables ↔ Studio CSV/XLSX files
        ├─ preview builder ── isolated iframe + data bridge
        └─ exporter ── versioned ZIP
 
 User key ── Pi model provider request
 ```
 
-The workspace service is the sole writer of project files. Monaco, agent tools, fixture operations, preview data writes, and export all use it. It maintains an accepted revision and, during an agent turn, a staged branch based on that revision. This avoids separate copies of a file drifting apart.
+The workspace service writes project files and Studio fixtures to separate OPFS roots. Monaco, agent tools, fixture operations, preview data writes, and export all use it. It maintains one accepted revision and, during an agent turn, a staged branch based on that revision. Multiple chats share these files but keep separate conversation state.
 
 ## Workspace contract
 
-All paths are project-relative POSIX paths. Reject absolute paths, `..` traversal, duplicate normalized paths, and writes to studio-owned records. Binary files are supported for images and XLSX; Monaco opens only supported text files.
+Project paths are project-relative POSIX paths. `fixtures/` is reserved for Studio data and unavailable to project file tools. Reject absolute paths, `..` traversal, duplicate normalized paths, and writes to studio-owned records. Binary files are supported for images and XLSX; Monaco opens only supported text files.
 
 ```ts
 interface Workspace {
@@ -47,11 +48,11 @@ interface WorkspaceStage {
 
 `expectedRevision` rejects stale writes. Agent tools see their staged branch, including their earlier edits in the same turn. Acceptance atomically advances the accepted revision only when its base is still current; otherwise the user sees a conflict and can review again. The UI labels changes from the user, agent, fixture editor, or preview.
 
-OPFS stores project bytes. IndexedDB stores project records, chat and tool events, snapshot metadata, and ZIP import provenance. Save operations are journaled so an interrupted write can be recovered or rolled back on reload. Browser storage remains subject to quota and deletion by the browser or user; export is the durable handoff.
+OPFS stores project bytes and Studio fixture bytes in separate roots. IndexedDB stores chats, tool events, and active chat selection. Each chat keeps its own Pi context and model selection; the project and fixtures are shared. Browser storage remains subject to quota and deletion by the browser or user; export is the durable handoff. Atomic journaling remains a planned improvement.
 
 ## Agent seam
 
-Use `@earendil-works/pi-agent-core` for the browser tool loop and `@earendil-works/pi-ai` for supported provider calls. The full `pi-coding-agent` SDK embeds in Node/Bun, so its default shell and file tools are not the browser implementation. Define a small, versioned set of custom tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `read_table`, and `write_table`. The agent cannot invoke a shell in the first release.
+Use `@earendil-works/pi-agent-core` for the browser tool loop and `@earendil-works/pi-ai` for supported provider calls. The full `pi-coding-agent` SDK embeds in Node/Bun, so its default shell and file tools are not the browser implementation. Define a small, versioned set of custom tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `list_tables`, `read_table`, and `write_table`. Project file tools do not expose fixture bytes. The agent cannot invoke a shell in the first release.
 
 Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. The agent can inspect current files, but its writes are staged for the user's review. Accept commits the staged revision; revert discards that branch. New user edits made during an active turn trigger a revision conflict instead of an automatic overwrite.
 
@@ -59,7 +60,7 @@ The key is entered by the user and held in session memory by default. It is pass
 
 ## Live preview seam
 
-The first release supports static HTML, CSS, JavaScript, images, and fixture tables. A preview builder reads an accepted workspace snapshot and materializes an iframe document. It resolves local CSS/JS/assets and injects a narrow table adapter. Accepted code or asset changes rebuild the preview. Table writes update the fixture file and notify the running preview without reloading its document. Preview state is reset when code reloads, while table state persists. A preview table write while an agent stage exists changes the accepted revision, so accepting the stage requires another review of the resulting conflict.
+The first release supports static HTML, CSS, JavaScript, images, and fixture tables. A preview builder reads accepted project files and Studio fixtures to materialize an iframe document. It resolves local CSS/JS/assets and injects a narrow table adapter. Accepted code or asset changes rebuild the preview. Table writes update Studio data and notify the running preview without reloading its document. Preview state is reset when code reloads, while table state persists. A preview table write while an agent stage exists changes the accepted revision, so accepting the stage requires another review of the resulting conflict.
 
 The iframe uses a sandbox that permits scripts but gives the page an opaque origin. It must not combine `allow-scripts` and `allow-same-origin` for a studio-origin document. Communication uses `postMessage` with a per-preview capability token, an allowlist of message types, path/table validation, payload limits, and revision checks. The preview receives no direct OPFS handle, model key, or parent DOM access. External network requests are blocked in the first release; allowing them later requires an explicit product decision and CSP review. [MDN iframe guidance](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe)
 
@@ -67,7 +68,7 @@ The bridge request types are `table.list`, `table.read`, and `table.mutate`; res
 
 ## Import, export, and migration seams
 
-ZIP import first validates paths, sizes, and supported file types into a temporary workspace. A studio export must also have a supported manifest and required entries; a plain project ZIP may omit studio metadata but must contain an `index.html` entry point. Import swaps the active workspace only after validation succeeds. ZIP export reads one consistent snapshot so `project/`, fixtures, and the manifest describe the same revision. Importing a studio ZIP created by an older schema runs a versioned migration; an unknown newer version opens read-only or fails with a clear message.
+ZIP import first validates paths, sizes, and supported file types into a temporary workspace. A studio export must also have a supported manifest and required entries; a plain project ZIP may omit studio metadata but must contain an `index.html` entry point. Import swaps the active workspace only after validation succeeds. ZIP v2 puts authored files in `project/`, fixtures in `studio/fixtures/`, and all transcripts and tool events in Studio metadata. The generated `project/fixture-seed.js` keeps the standalone project runnable. Import migrates v1 project fixtures into Studio data; unknown newer versions fail with a clear message.
 
 ## Package candidates and evidence
 

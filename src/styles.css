@@ -97,3 +97,30 @@
 .activity-empty { padding: 8px 4px; color: #809185; font-size: 10px; }
 .activity-more { margin-top: 7px; padding: 4px 0; color: #afd59c; }
 @media (max-width: 600px) { .diff-toolbar { align-items: flex-start; flex-direction: column; padding: 8px 12px; } .diff-controls { width: 100%; justify-content: flex-end; } .diff-head { padding: 12px; } .diff-head h2 { font-size: 14px; } }
+
+.data-item:not(.selected) { background: none; color: #aab8ae; }
+.data-item:not(.selected):hover { background: #242e2c; color: #e2eadf; }
+.agent-header { height: auto; min-height: 103px; display: block; padding: 11px 13px 10px; position: relative; z-index: 4; }
+.agent-header-top { display: flex; align-items: flex-start; justify-content: space-between; }
+.agent-header-top > div > span { color: #76817c; font-size: 10px; display: block; margin: 3px 0 0 24px; }
+.chat-switcher { display: flex; gap: 5px; margin-top: 10px; }
+.agent-header .chat-current { flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 8px; background: #252d2d; border: 1px solid #3b4941; border-radius: 5px; color: #d7e4d1; text-align: left; cursor: pointer; }
+.agent-header .chat-current > span { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; color: inherit; font-size: 10px; font-weight: 700; }
+.chat-current > svg:last-child { flex: none; color: #96a997; }
+.agent-header .chat-new { flex: none; width: 30px; height: 30px; display: grid; place-items: center; padding: 0; background: #28362c; border: 1px solid #506b4b; border-radius: 5px; color: #c4e8b2; cursor: pointer; }
+.agent-header .chat-new:disabled { opacity: .4; cursor: default; }
+.chat-menu { position: absolute; top: calc(100% - 1px); left: 12px; right: 12px; z-index: 10; border: 1px solid #506357; border-radius: 0 0 7px 7px; background: #202929; box-shadow: 0 14px 28px #0008; padding: 8px; }
+.chat-menu-heading { display: flex; justify-content: space-between; padding: 3px 6px 8px; color: #8cab92; font-size: 9px; font-weight: 800; letter-spacing: .1em; }
+.chat-menu p { margin: 2px 6px 9px; color: #b9ae82; font-size: 10px; line-height: 1.4; }
+.chat-menu-list { max-height: 260px; overflow: auto; display: grid; gap: 3px; }
+.chat-menu-row { display: flex; align-items: center; border-radius: 4px; }
+.chat-menu-row:hover, .chat-menu-row.active { background: #314436; }
+.agent-header .chat-menu-list .chat-menu-select { flex: 1; min-width: 0; display: block; padding: 8px 9px; border: 0; border-radius: 4px; background: none; color: #c4d2c8; text-align: left; cursor: pointer; }
+.agent-header .chat-menu-list .chat-menu-select:disabled { opacity: .45; cursor: default; }
+.agent-header .chat-menu-list .chat-rename { flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; color: #9caf9e; }
+.agent-header .chat-menu-list .chat-rename:disabled { opacity: .4; cursor: default; }
+.chat-menu-row input { flex: 1; min-width: 0; height: 28px; margin-left: 5px; padding: 0 6px; border: 1px solid #87aa78; border-radius: 3px; background: #1b2825; color: #e7f0e2; font-size: 10px; }
+.chat-menu-list button span { display: block; margin: 0; color: inherit; font-size: 10px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-menu-list button small { display: block; margin-top: 3px; color: #91a593; font-size: 9px; }
+.agent-header .chat-menu-new { width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 6px; margin-top: 7px; padding: 8px 7px; border-top: 1px solid #3b4a40; border-radius: 0; color: #bbddae; font-size: 10px; font-weight: 700; cursor: pointer; }
+.chat-menu-new:disabled { opacity: .4; cursor: default; }

@@ -5,8 +5,8 @@ Status: **Draft for review**
 | Term | Meaning in this product |
 | --- | --- |
 | **Studio** | The TypeScript web application deployed on Vercel. It provides editor, chat, preview, fixtures, and export. |
-| **Project** | The user's authored HTML/CSS/JavaScript site and its fixture files. It is the `project/` directory in an export. |
-| **Workspace** | The mutable browser-local copy of one project, plus its studio metadata. It is private to this site's browser origin. |
+| **Project** | The user's authored HTML/CSS/JavaScript site and assets. It is the `project/` directory in an export. |
+| **Workspace** | The mutable browser-local project, Studio fixtures, and chat metadata. It is private to this site's browser origin. |
 | **Workspace service** | The sole file API used by Monaco, the agent, fixtures, preview builder, and exporter. |
 | **OPFS** | Origin private file system: browser storage for project bytes. It is not an ordinary folder visible in Finder or Explorer. |
 | **IndexedDB** | Browser database for sessions, metadata, and checkpoints. |
@@ -20,7 +20,8 @@ Status: **Draft for review**
 | **Diff** | The before/after view of changed text files for a turn or checkpoint. |
 | **Preview** | An isolated iframe running a materialized copy of the accepted project in the browser. |
 | **Preview bridge** | A narrow message protocol between the isolated project preview and the studio's fixture service. |
-| **Fixture** | A named table of sample or user-edited data stored as CSV or XLSX in the project. It is data, not a mock network endpoint. |
+| **Fixture** | A named CSV/XLSX table owned by Studio data. The preview reads and changes it through the bridge; it is separate from project source files. |
+| **Chat** | One agent conversation with its own transcript, tool activity, model selection, and local Pi context. Chats share the project and fixtures. |
 | **Normalized table** | The in-memory row and column representation used to read, validate, edit, and serialize either fixture format. |
 | **Generation recipe** | Schema, seed, reference date, and generator version used to reproduce a sample table. |
 | **BYOK** | Bring your own key: the user provides a model provider API key for calls made from their browser. |

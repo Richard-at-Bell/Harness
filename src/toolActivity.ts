@@ -12,7 +12,9 @@ function inputSummary(name: string, args: ToolArgs): string {
   if (name === 'edit_file') return `Replace ${typeof args.oldText === 'string' ? args.oldText.length : 0} with ${typeof args.newText === 'string' ? args.newText.length : 0} characters`;
   if (name === 'write_file') return `Write ${typeof args.content === 'string' ? args.content.length : 0} characters`;
   if (name === 'write_table') { const count = Array.isArray(args.rows) ? args.rows.length : 0; return `Write ${count} ${count === 1 ? 'row' : 'rows'}`; }
-  if (name === 'read_file' || name === 'read_table') return 'Read project data';
+  if (name === 'read_file') return 'Read project file';
+  if (name === 'read_table') return 'Read Studio fixture';
+  if (name === 'list_tables') return 'List Studio fixtures';
   if (name === 'delete_file') return 'Delete project file';
   return 'List project files';
 }

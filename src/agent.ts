@@ -1,7 +1,7 @@
 import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
 import { createModels, Type, contentText } from '@earendil-works/pi-ai';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
-import { readTable, tableBytes, type Row } from './fixtures';
+import { fixtureIds, readTable, tableBytes, type Row } from './fixtures';
 import { DEFAULT_MODEL } from './models';
 import { finishedTool, startedTool } from './toolActivity';
 import type { Stage, ToolLine } from './workspace';
@@ -9,7 +9,7 @@ import { toText } from './workspace';
 
 export { DEFAULT_MODEL };
 
-const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Preserve it unless the user explicitly asks to change data behavior. Use read_table and write_table for fixture data, especially XLSX. Read relevant files before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
+const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables, read_table, and write_table for fixture data. Read relevant files before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
@@ -17,6 +17,10 @@ export function createTools(stage: Stage): AgentTool[] {
   const list: AgentTool = {
     name: 'list_files', label: 'List files', description: 'List all project-relative paths.', parameters: Type.Object({}),
     async execute() { return result(stage.list().join('\n')); },
+  };
+  const listTables: AgentTool = {
+    name: 'list_tables', label: 'List Studio fixtures', description: 'List named CSV/XLSX fixture tables managed by Studio data.', parameters: Type.Object({}),
+    async execute() { return result(fixtureIds(stage.fixtures).join('\n')); },
   };
   const read: AgentTool = {
     name: 'read_file', label: 'Read file', description: 'Read a UTF-8 project file by relative path.', parameters: Type.Object({ path: Type.String() }),
@@ -57,7 +61,7 @@ export function createTools(stage: Stage): AgentTool[] {
     async execute(_id, input) {
       const { table } = input as { table: string };
       if (!/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table name');
-      const value = await readTable(stage.files, table);
+      const value = await readTable(stage.fixtures, table);
       if (value.rows.length > 1000) throw new Error('Table is too large for this tool');
       return result(JSON.stringify({ columns: value.columns, rows: value.rows }));
     },
@@ -68,7 +72,7 @@ export function createTools(stage: Stage): AgentTool[] {
       const { table, rows } = input as { table: string; rows: unknown[] };
       if (!/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table name');
       if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Table must have at most 1000 rows');
-      const current = await readTable(stage.files, table);
+      const current = await readTable(stage.fixtures, table);
       const clean: Row[] = rows.map((item, index) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`Invalid row ${index + 1}`);
         const raw = item as Record<string, unknown>;
@@ -78,11 +82,11 @@ export function createTools(stage: Stage): AgentTool[] {
           return [column, (value ?? null) as Row[string]];
         }));
       });
-      stage.writeBytes(current.path, await tableBytes({ ...current, rows: clean }));
+      stage.writeFixtureBytes(current.path, await tableBytes({ ...current, rows: clean }));
       return result(`Wrote ${clean.length} rows to ${current.path}.`);
     },
   };
-  return [list, read, write, edit, remove, readTableTool, writeTableTool];
+  return [list, listTables, read, write, edit, remove, readTableTool, writeTableTool];
 }
 
 export type AgentCallbacks = {

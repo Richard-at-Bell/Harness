@@ -28,9 +28,9 @@ function inlineCss(files: FileMap, css: string): string {
   });
 }
 
-export async function buildPreview(files: FileMap, token: string): Promise<string> {
+export async function buildPreview(files: FileMap, fixtures: FileMap, token: string): Promise<string> {
   let html = files.has('index.html') ? toText(files.get('index.html')!) : '<!doctype html><p>No index.html file</p>';
-  const seed = await seedScript(files);
+  const seed = await seedScript(fixtures);
   const support = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'">\n<script>window.__STUDIO_BRIDGE_TOKEN__=${JSON.stringify(token)};${escapeScript(seed)};window.addEventListener('error',event=>parent.postMessage({kind:'preview.error',token:window.__STUDIO_BRIDGE_TOKEN__,message:event.message},'*'));</script>`;
   html = html.includes('</head>') ? html.replace('</head>', `${support}</head>`) : support + html;
   html = html.replace(/<link\b([^>]*?)href=["']([^"']+)["']([^>]*)>/gi, (full, before, path, after) => {
@@ -52,7 +52,7 @@ export async function buildPreview(files: FileMap, token: string): Promise<strin
 }
 
 export function codeSignature(files: FileMap): string {
-  return [...files.entries()].filter(([path]) => !path.startsWith('fixtures/')).map(([path, bytes]) => {
+  return [...files.entries()].map(([path, bytes]) => {
     let hash = 2166136261;
     for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
     return `${path}:${bytes.length}:${hash >>> 0}`;

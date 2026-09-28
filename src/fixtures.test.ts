@@ -28,8 +28,8 @@ describe('fixture tables', () => {
   });
 
   it('detects changed spreadsheet bytes in a staged agent turn', () => {
-    const stage = new Stage(new Map([['fixtures/todos.xlsx', new Uint8Array([1, 2, 3])]]), 1);
-    stage.writeBytes('fixtures/todos.xlsx', new Uint8Array([1, 2, 4]));
+    const stage = new Stage(new Map(), 1, new Map([['fixtures/todos.xlsx', new Uint8Array([1, 2, 3])]]));
+    stage.writeFixtureBytes('fixtures/todos.xlsx', new Uint8Array([1, 2, 4]));
     expect(stage.changes()).toEqual(['fixtures/todos.xlsx']);
   });
 });
