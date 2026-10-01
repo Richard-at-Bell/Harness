@@ -9,7 +9,7 @@ import { toText } from './workspace';
 
 export { DEFAULT_MODEL };
 
-const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables, read_table, and write_table for fixture data. Read relevant files before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
+const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables, read_table, and write_table for fixture data. New scalar fields written by the app or write_table automatically become fixture columns; the schema can grow when adding app features. Preserve existing rows and values when extending it. Read relevant files and fixtures before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
@@ -67,7 +67,7 @@ export function createTools(stage: Stage): AgentTool[] {
     },
   };
   const writeTableTool: AgentTool = {
-    name: 'write_table', label: 'Write fixture table', description: 'Replace rows of an existing CSV or XLSX fixture. Preserve its columns. Read it first.', parameters: Type.Object({ table: Type.String(), rows: Type.Array(Type.Record(Type.String(), Type.Any())) }), executionMode: 'sequential',
+    name: 'write_table', label: 'Write fixture table', description: 'Replace rows of an existing CSV or XLSX fixture. Existing columns are preserved; new scalar fields in rows add columns automatically. Read it first and include all rows to keep them.', parameters: Type.Object({ table: Type.String(), rows: Type.Array(Type.Record(Type.String(), Type.Any())) }), executionMode: 'sequential',
     async execute(_id, input) {
       const { table, rows } = input as { table: string; rows: unknown[] };
       if (!/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table name');
@@ -76,14 +76,15 @@ export function createTools(stage: Stage): AgentTool[] {
       const clean: Row[] = rows.map((item, index) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`Invalid row ${index + 1}`);
         const raw = item as Record<string, unknown>;
-        return Object.fromEntries(current.columns.map(column => {
+        return Object.fromEntries([...new Set([...current.columns, ...Object.keys(raw)])].map(column => {
           const value = raw[column];
           if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw new Error(`Invalid ${column} value in row ${index + 1}`);
           return [column, (value ?? null) as Row[string]];
         }));
       });
       stage.writeFixtureBytes(current.path, await tableBytes({ ...current, rows: clean }));
-      return result(`Wrote ${clean.length} rows to ${current.path}.`);
+      const saved = await readTable(stage.fixtures, table);
+      return result(`Wrote ${clean.length} rows to ${current.path}. Columns: ${saved.columns.join(', ')}.`);
     },
   };
   return [list, listTables, read, write, edit, remove, readTableTool, writeTableTool];

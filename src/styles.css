@@ -124,3 +124,4 @@
 .chat-menu-list button small { display: block; margin-top: 3px; color: #91a593; font-size: 9px; }
 .agent-header .chat-menu-new { width: 100%; display: flex; align-items: center; justify-content: flex-start; gap: 6px; margin-top: 7px; padding: 8px 7px; border-top: 1px solid #3b4a40; border-radius: 0; color: #bbddae; font-size: 10px; font-weight: 700; cursor: pointer; }
 .chat-menu-new:disabled { opacity: .4; cursor: default; }
+.export-download { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }

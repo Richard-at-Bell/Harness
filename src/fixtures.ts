@@ -60,15 +60,24 @@ export async function readTable(files: FileMap, id: string): Promise<Table> {
 }
 
 export async function tableBytes(table: Table): Promise<Uint8Array> {
+  // App features can introduce fields through the preview or agent tools.
+  // Append them to the schema instead of silently discarding their values.
+  const columns = [...new Set([...table.columns, ...table.rows.flatMap(row => Object.keys(row))])];
+  for (const column of columns) if (!column.trim()) throw new Error('Fixture columns must have a name');
+  for (const [index, row] of table.rows.entries()) for (const [column, value] of Object.entries(row)) {
+    if (value != null && (!['string', 'number', 'boolean'].includes(typeof value) || typeof value === 'number' && !Number.isFinite(value))) {
+      throw new Error(`Invalid ${column} value in row ${index + 1}: use a string, number, boolean, or null`);
+    }
+  }
   if (table.format === 'csv') {
-    const csv = Papa.unparse({ fields: table.columns, data: table.rows.map(row => table.columns.map(column => row[column] ?? '')) }, { escapeFormulae: true, newline: '\n' });
+    const csv = Papa.unparse({ fields: columns, data: table.rows.map(row => columns.map(column => row[column] ?? '')) }, { escapeFormulae: true, newline: '\n' });
     return toBytes(csv + '\n');
   }
   const ExcelJS = await import('exceljs');
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('Data');
-  sheet.addRow(table.columns);
-  for (const row of table.rows) sheet.addRow(table.columns.map(column => row[column]));
+  sheet.addRow(columns);
+  for (const row of table.rows) sheet.addRow(columns.map(column => row[column] ?? null));
   return new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer);
 }
 

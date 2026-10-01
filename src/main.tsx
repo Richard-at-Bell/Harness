@@ -13,7 +13,7 @@ import { ActivityPanel } from './ActivityPanel';
 import { ChatSwitcher } from './ChatSwitcher';
 import { DiffReview } from './DiffReview';
 import { loadLiveModels, MODEL_CHOICES, modelName, pricePerMillion, type LiveModel } from './models';
-import { downloadBlob, exportZip, importZip } from './export';
+import { exportZip, importZip } from './export';
 import { fixtureIds, generateRows, readTable, tableBytes, type Row, type Table } from './fixtures';
 import { buildPreview, codeSignature } from './preview';
 import { templateFiles, templateFixtures } from './template';
@@ -89,6 +89,8 @@ function App() {
   const [generationSeed, setGenerationSeed] = useState(42);
   const [generationCount, setGenerationCount] = useState(8);
   const [notice, setNotice] = useState('');
+  const [exportUrl, setExportUrl] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
   const [rightOpen, setRightOpen] = useState(() => window.innerWidth > 750);
 
   function updateActive(change: (current: StudioChat) => StudioChat) {
@@ -135,6 +137,8 @@ function App() {
   }, [ready, fixtures, selectedTableId]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat, busy]);
+
+  useEffect(() => () => { if (exportUrl) URL.revokeObjectURL(exportUrl); }, [exportUrl]);
 
   useEffect(() => {
     if (!settingsOpen || liveModels) return;
@@ -282,8 +286,11 @@ function App() {
   }
 
   async function exportProject() {
-    try { downloadBlob(await exportZip(workspaceRef.current!.files, workspaceRef.current!.fixtures, chats, activeChatId), 'project-studio-export.zip'); flash('ZIP exported.'); }
+    if (!workspaceRef.current || exportBusy) return;
+    setExportBusy(true);
+    try { setExportUrl(URL.createObjectURL(await exportZip(workspaceRef.current.files, workspaceRef.current.fixtures, chats, activeChatId))); }
     catch (error) { flash(String(error instanceof Error ? error.message : error)); }
+    finally { setExportBusy(false); }
   }
 
   async function resetProject() {
@@ -360,7 +367,7 @@ function App() {
       <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state">{ready ? 'Saved locally' : 'Opening…'}</span></div>
       <div className="topbar-actions">
         <button className="text-button" onClick={() => importRef.current?.click()} title="Import ZIP"><FolderOpen size={16} /> Import</button>
-        <button className="text-button" onClick={exportProject} title="Export project, fixtures, and chats"><ArrowDownToLine size={16} /> Export ZIP</button>
+        <button className="text-button" onClick={exportProject} disabled={!ready || exportBusy} title="Export project, fixtures, and chats"><ArrowDownToLine size={16} /> {exportBusy ? 'Preparing ZIP…' : 'Export ZIP'}</button>
         {!rightOpen && <button className="top-icon mobile-agent-button" onClick={() => setRightOpen(true)} title="Open agent"><Sparkles size={17} /></button>}
         <button className="top-icon" onClick={() => setSettingsOpen(true)} title="Model settings"><KeyRound size={17} /></button>
         <input ref={importRef} type="file" accept=".zip" hidden onChange={event => { const file = event.target.files?.[0]; if (file) importProject(file); event.target.value = ''; }} />
@@ -399,6 +406,14 @@ function App() {
         <div className="composer"><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><button className="model-button" onClick={() => setSettingsOpen(true)}><span className={key ? 'model-dot ready' : 'model-dot'} /> {modelName(modelId)} <ChevronDown size={13} /></button><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p>{key ? 'Agent changes are staged for your review.' : 'Add an OpenRouter key in model settings to start.'}</p></div>
       </aside> : <button className="agent-reopen" onClick={() => setRightOpen(true)}><Sparkles size={17} /> Agent</button>}
     </div>
+
+    {exportUrl && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setExportUrl(''); }}>
+      <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Export ready">
+        <div className="modal-head"><div><span className="section-kicker">PROJECT EXPORT</span><h2>Your ZIP is ready</h2></div><button onClick={() => setExportUrl('')} aria-label="Close export"><X size={20} /></button></div>
+        <p>Includes project files, Studio fixtures, all chats, and tool activity.</p>
+        <div className="modal-actions"><button onClick={() => setExportUrl('')}>Close</button><a className="primary-small export-download" href={exportUrl} download="project-studio-export.zip"><ArrowDownToLine size={15} /> Download ZIP</a></div>
+      </div>
+    </div>}
 
     {settingsOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
       <div className="settings-modal model-modal">

@@ -65,3 +65,9 @@ Status: **Draft for review** · 2026-09-28
 ## D-011: Multiple chats
 
 **Implemented default:** A workspace has multiple named chats. Each chat owns its model selection, visible transcript, tool activity, and Pi context. The project and Studio fixtures are shared across chats. Switching chats is held while a turn is running or staged changes await review, so the change set stays attached to its originating chat. ZIP v2 includes every chat and log; Pi context is local browser state and is not exported.
+
+## D-012: Fixture schema growth
+
+**Implemented default:** New scalar fields from preview mutations or `write_table` append columns to CSV/XLSX fixtures. Existing columns retain their order. Old rows receive empty cells for added fields, and invalid nested values fail visibly. Agent table writes include the saved column list in their response. This makes adding app features such as priority and due dates possible through the agent workflow. Column rename, removal, and explicit types need a later schema editor.
+
+**Evidence:** Browser testing reproduced priorities returning to Medium after reload because the old serializer discarded fields outside the original four columns. Both CSV and XLSX now have regression checks for new fields surviving later saves.

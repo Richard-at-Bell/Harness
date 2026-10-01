@@ -6,3 +6,4 @@ dist/
 !.env.example
 *.local
 .DS_Store
+review-artifacts/

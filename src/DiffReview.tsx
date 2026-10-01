@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { Check, ChevronDown, ChevronUp, X } from 'lucide-react';
@@ -31,10 +31,23 @@ type Props = {
 
 export function DiffReview({ path, paths, original, modified, language, onPathChange, onClose, onDiscard, onAccept }: Props) {
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
+  const modelsRef = useRef<monaco.editor.IDiffEditorModel | null>(null);
+  const subscriptionRef = useRef<monaco.IDisposable | null>(null);
   const focusedRef = useRef(false);
   const [changes, setChanges] = useState<monaco.editor.ILineChange[]>([]);
   const [active, setActive] = useState(0);
   const [split, setSplit] = useState(false);
+
+  useEffect(() => () => {
+    subscriptionRef.current?.dispose();
+    // Detach before disposing: the React wrapper otherwise destroys models
+    // while Monaco's diff widget still observes them.
+    editorRef.current?.setModel(null);
+    modelsRef.current?.original.dispose();
+    modelsRef.current?.modified.dispose();
+    editorRef.current = null;
+    modelsRef.current = null;
+  }, []);
 
   function focusChange(index: number, lines = changes, editor = editorRef.current) {
     if (!editor || !lines.length) return;
@@ -49,6 +62,7 @@ export function DiffReview({ path, paths, original, modified, language, onPathCh
 
   function onMount(editor: monaco.editor.IStandaloneDiffEditor) {
     editorRef.current = editor;
+    modelsRef.current = editor.getModel();
     const refresh = () => {
       const next = editor.getLineChanges();
       if (!next) return;
@@ -59,7 +73,7 @@ export function DiffReview({ path, paths, original, modified, language, onPathCh
         focusChange(0, next, editor);
       }
     };
-    editor.onDidUpdateDiff(refresh);
+    subscriptionRef.current = editor.onDidUpdateDiff(refresh);
     refresh();
   }
 
@@ -70,7 +84,7 @@ export function DiffReview({ path, paths, original, modified, language, onPathCh
         <div className="diff-legend"><span className="diff-added">+ Added</span><span className="diff-removed">− Removed</span><span className="diff-count">{changes.length ? `Change ${active + 1} of ${changes.length}` : 'No line changes'}</span></div>
         <div className="diff-controls"><div className="diff-mode" aria-label="Diff layout"><button className={!split ? 'selected' : ''} aria-pressed={!split} onClick={() => setSplit(false)}>Inline</button><button className={split ? 'selected' : ''} aria-pressed={split} onClick={() => setSplit(true)}>Split</button></div><button disabled={!changes.length} onClick={() => focusChange((active - 1 + changes.length) % changes.length)} title="Previous change" aria-label="Previous change"><ChevronUp size={15} /></button><button disabled={!changes.length} onClick={() => focusChange((active + 1) % changes.length)} title="Next change" aria-label="Next change"><ChevronDown size={15} /></button></div>
       </div>
-      <div className="diff-editor"><DiffEditor original={original} modified={modified} language={language} theme="studio-diff" onMount={onMount} options={{ readOnly: true, originalEditable: false, minimap: { enabled: false }, fontSize: 12, lineHeight: 21, renderSideBySide: split, automaticLayout: true, scrollBeyondLastLine: false, renderIndicators: true, ignoreTrimWhitespace: false, hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 12, revealLineCount: 6 } }} /></div>
+      <div className="diff-editor"><DiffEditor original={original} modified={modified} language={language} theme="studio-diff" onMount={onMount} keepCurrentOriginalModel keepCurrentModifiedModel options={{ readOnly: true, originalEditable: false, minimap: { enabled: false }, fontSize: 12, lineHeight: 21, renderSideBySide: split, automaticLayout: true, scrollBeyondLastLine: false, renderIndicators: true, ignoreTrimWhitespace: false, hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 12, revealLineCount: 6 } }} /></div>
       <div className="diff-footer"><button onClick={onDiscard}>Discard changes</button><button className="primary-small" onClick={onAccept}><Check size={15} /> Accept {paths.length} {paths.length === 1 ? 'file' : 'files'}</button></div>
     </div>
   </div>;

@@ -6,6 +6,8 @@ Status: **Draft for review** · Related decisions: [D-006](decisions.md#d-006-wh
 
 A fixture is a named table, not a mock API. Its schema declares ordered columns, a stable row ID column, primitive value types, nullable fields, and an optional generation recipe. Supported value types for the first release are text, number, boolean, date as ISO text, and empty. Formula execution, cell formatting, macros, charts, multiple joined sheets, and arbitrary workbook features are outside this model.
 
+The current serializer preserves existing column order and appends new fields found in rows. Preview inserts/updates and the agent's `write_table` can therefore introduce fields such as `priority` or `due_date` without silently losing them. Nested objects, arrays, and nonfinite numbers fail with a readable error. Fields absent from older rows become empty cells. Explicit column rename, deletion, and type editing remain future work; the typed schema below is the planned richer contract.
+
 The fixture service converts CSV or XLSX bytes into the normalized table model, validates values, and serializes rows back to the chosen file format. A fixture has one authoritative Studio data file, separate from project source files. The table editor and preview mutate the normalized table through the fixture service; serializing a mutation updates that file. The preview never edits spreadsheet bytes directly.
 
 ```ts

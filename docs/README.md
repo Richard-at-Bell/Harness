@@ -12,6 +12,7 @@ Read in this order:
 4. [Decision register](decisions.md) — proposed choices, alternatives, unresolved points.
 5. [Glossary](glossary.md) — terms used consistently across the specs.
 6. [Agent model choices](model-selection.md) — current picker models and the comparison seam.
+7. [Browser agent workflow review](browser-workflow-review.md) — requested capabilities, observed UI results, and harness fixes.
 
 ## Review focus
 
