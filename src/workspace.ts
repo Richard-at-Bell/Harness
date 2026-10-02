@@ -1,4 +1,5 @@
 import { openDB, type IDBPDatabase } from 'idb';
+import { createStore } from 'zustand/vanilla';
 import { templateFiles, templateFixtures } from './template';
 import { DEFAULT_MODEL } from './models';
 
@@ -108,27 +109,55 @@ async function removeFile(root: FileSystemDirectoryHandle, path: string): Promis
   await dir.removeEntry(parts.at(-1)!);
 }
 
-export class Workspace {
-  private root: FileSystemDirectoryHandle;
-  private fixtureRoot: FileSystemDirectoryHandle;
-  files: FileMap;
-  fixtures: FileMap;
-  revision = 0;
-  private writes: Promise<unknown> = Promise.resolve();
+export type WorkspaceSnapshot = { files: FileMap; fixtures: FileMap; revision: number };
+export type WorkspaceStorage = {
+  write: (fixture: boolean, path: string, bytes: Uint8Array) => Promise<void>;
+  remove: (fixture: boolean, path: string) => Promise<void>;
+};
+export type WorkspaceWriter = Pick<Workspace, 'files' | 'fixtures' | 'revision' | 'snapshot' | 'fixtureSnapshot' | 'stage' | 'write' | 'remove' | 'writeFixture' | 'removeFixture' | 'replace'>;
 
-  private constructor(root: FileSystemDirectoryHandle, fixtureRoot: FileSystemDirectoryHandle, files: FileMap, fixtures: FileMap) { this.root = root; this.fixtureRoot = fixtureRoot; this.files = files; this.fixtures = fixtures; }
+export function copyFiles(files: FileMap): FileMap {
+  return new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
+}
+export function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
+  return a && b ? a.length === b.length && a.every((byte, index) => byte === b[index]) : a === b;
+}
+function publishFiles(files: FileMap, previous: FileMap): FileMap {
+  if (files.size === previous.size && [...files].every(([path, bytes]) => sameBytes(bytes, previous.get(path)))) return previous;
+  return new Map([...files].map(([path, bytes]) => [path, sameBytes(bytes, previous.get(path)) ? previous.get(path)! : bytes.slice()]));
+}
+
+// Storage owns accepted bytes. The store is a read-only published projection;
+// callers get detached working snapshots, never the storage-owned byte arrays.
+export class Workspace {
+  private acceptedFiles: FileMap;
+  private acceptedFixtures: FileMap;
+  private currentRevision = 0;
+  private operations: Promise<unknown> = Promise.resolve();
+  private readonly publication;
+  readonly store;
+
+  constructor(private readonly storage: WorkspaceStorage, files: FileMap, fixtures: FileMap = new Map()) {
+    this.acceptedFiles = copyFiles(files);
+    this.acceptedFixtures = copyFiles(fixtures);
+    this.publication = createStore<WorkspaceSnapshot>()(() => ({ files: copyFiles(files), fixtures: copyFiles(fixtures), revision: 0 }));
+    const { getState, getInitialState, subscribe } = this.publication;
+    this.store = { getState, getInitialState, subscribe };
+  }
 
   static async open(): Promise<Workspace> {
     const roots = await storageRoots();
     const files = await readAll(roots.project);
     const fixtures = await readAll(roots.fixtures);
-    // Existing workspaces kept fixtures under the project root. Copy first, then remove.
     for (const [path, bytes] of files) if (validFixturePath(path)) {
       if (!fixtures.has(path)) { await writeFile(roots.fixtures, path, bytes); fixtures.set(path, bytes); }
       await removeFile(roots.project, path);
       files.delete(path);
     }
-    const workspace = new Workspace(roots.project, roots.fixtures, files, fixtures);
+    const workspace = new Workspace({
+      write: (fixture, path, bytes) => writeFile(fixture ? roots.fixtures : roots.project, path, bytes),
+      remove: (fixture, path) => removeFile(fixture ? roots.fixtures : roots.project, path),
+    }, files, fixtures);
     if (!files.size) await workspace.replace(
       new Map(Object.entries(templateFiles).map(([p, v]) => [p, toBytes(v)])),
       fixtures.size ? fixtures : new Map(Object.entries(templateFixtures).map(([p, v]) => [p, toBytes(v)])),
@@ -136,57 +165,80 @@ export class Workspace {
     return workspace;
   }
 
-  read(path: string): Uint8Array | undefined { return this.files.get(path); }
-  text(path: string): string { return toText(this.files.get(path) || new Uint8Array()); }
-  snapshot(): FileMap { return new Map(this.files); }
-  fixtureSnapshot(): FileMap { return new Map(this.fixtures); }
+  get files(): FileMap { return this.snapshot(); }
+  get fixtures(): FileMap { return this.fixtureSnapshot(); }
+  get revision(): number { return this.currentRevision; }
+  read(path: string): Uint8Array | undefined { return this.acceptedFiles.get(path)?.slice(); }
+  text(path: string): string { return toText(this.acceptedFiles.get(path) || new Uint8Array()); }
+  snapshot(): FileMap { return copyFiles(this.acceptedFiles); }
+  fixtureSnapshot(): FileMap { return copyFiles(this.acceptedFixtures); }
+  stage(): Stage { return new Stage(this.snapshot(), this.revision, this.fixtureSnapshot()); }
 
-  async write(path: string, bytes: Uint8Array): Promise<void> {
-    if (!validProjectPath(path)) throw new Error('Invalid project path');
-    this.files = new Map(this.files).set(path, bytes);
-    this.revision++;
-    this.writes = this.writes.then(() => writeFile(this.root, path, bytes));
-    await this.writes;
+  // Protect the entire read/parse/modify/serialize/write operation, including
+  // revision checks. Inside the callback use this writer, not queued methods.
+  transaction<T>(operation: (writer: WorkspaceWriter) => Promise<T>): Promise<T> {
+    const run = async () => {
+      const workspace = this;
+      const writer: WorkspaceWriter = {
+        get files() { return workspace.snapshot(); },
+        get fixtures() { return workspace.fixtureSnapshot(); },
+        get revision() { return workspace.revision; },
+        snapshot: () => this.snapshot(), fixtureSnapshot: () => this.fixtureSnapshot(), stage: () => this.stage(),
+        write: (path, bytes) => this.commitWrite(false, path, bytes),
+        remove: path => this.commitRemove(false, path),
+        writeFixture: (path, bytes) => this.commitWrite(true, path, bytes),
+        removeFixture: path => this.commitRemove(true, path),
+        replace: (files, fixtures) => this.commitReplace(files, fixtures ?? this.acceptedFixtures),
+      };
+      try { return await operation(writer); }
+      finally {
+        const previous = this.publication.getState();
+        if (previous.revision !== this.revision) this.publication.setState({
+          files: publishFiles(this.acceptedFiles, previous.files),
+          fixtures: publishFiles(this.acceptedFixtures, previous.fixtures), revision: this.revision,
+        });
+      }
+    };
+    const result = this.operations.then(run, run);
+    this.operations = result.catch(() => {});
+    return result;
   }
 
-  async remove(path: string): Promise<void> {
-    if (!validProjectPath(path)) throw new Error('Invalid project path');
-    if (!this.files.has(path)) return;
-    const next = new Map(this.files); next.delete(path); this.files = next; this.revision++;
-    this.writes = this.writes.then(() => removeFile(this.root, path));
-    await this.writes;
+  private async commitWrite(fixture: boolean, path: string, bytes: Uint8Array): Promise<void> {
+    if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error(fixture ? 'Invalid fixture path' : 'Invalid project path');
+    const owned = bytes.slice();
+    const files = fixture ? this.acceptedFixtures : this.acceptedFiles;
+    if (sameBytes(files.get(path), owned)) return;
+    await this.storage.write(fixture, path, owned.slice());
+    files.set(path, owned);
+    this.currentRevision++;
   }
-
-  async writeFixture(path: string, bytes: Uint8Array): Promise<void> {
-    if (!validFixturePath(path)) throw new Error('Invalid fixture path');
-    this.fixtures = new Map(this.fixtures).set(path, bytes);
-    this.revision++;
-    this.writes = this.writes.then(() => writeFile(this.fixtureRoot, path, bytes));
-    await this.writes;
+  private async commitRemove(fixture: boolean, path: string): Promise<void> {
+    if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error('Invalid path');
+    const files = fixture ? this.acceptedFixtures : this.acceptedFiles;
+    if (!files.has(path)) return;
+    await this.storage.remove(fixture, path);
+    files.delete(path);
+    this.currentRevision++;
   }
-
-  async removeFixture(path: string): Promise<void> {
-    if (!validFixturePath(path)) throw new Error('Invalid fixture path');
-    if (!this.fixtures.has(path)) return;
-    const next = new Map(this.fixtures); next.delete(path); this.fixtures = next; this.revision++;
-    this.writes = this.writes.then(() => removeFile(this.fixtureRoot, path));
-    await this.writes;
-  }
-
-  async replace(files: FileMap, fixtures: FileMap = this.fixtures): Promise<void> {
+  private async commitReplace(files: FileMap, fixtures: FileMap): Promise<void> {
     for (const path of files.keys()) if (!validProjectPath(path)) throw new Error(`Invalid project path: ${path}`);
     for (const path of fixtures.keys()) if (!validFixturePath(path)) throw new Error(`Invalid fixture path: ${path}`);
-    await this.writes;
-    for (const path of this.files.keys()) if (!files.has(path)) await removeFile(this.root, path);
-    for (const [path, bytes] of files) await writeFile(this.root, path, bytes);
-    for (const path of this.fixtures.keys()) if (!fixtures.has(path)) await removeFile(this.fixtureRoot, path);
-    for (const [path, bytes] of fixtures) await writeFile(this.fixtureRoot, path, bytes);
-    this.files = new Map(files);
-    this.fixtures = new Map(fixtures);
-    this.revision++;
+    // Successful individual writes remain authoritative if a later disk write
+    // fails. Finally publishes that partial success and the queue stays usable.
+    for (const [path, bytes] of files) await this.commitWrite(false, path, bytes);
+    for (const [path, bytes] of fixtures) await this.commitWrite(true, path, bytes);
+    for (const path of this.acceptedFiles.keys()) if (!files.has(path)) await this.commitRemove(false, path);
+    for (const path of this.acceptedFixtures.keys()) if (!fixtures.has(path)) await this.commitRemove(true, path);
   }
-
-  stage(): Stage { return new Stage(this.snapshot(), this.revision, this.fixtureSnapshot()); }
+  write(path: string, bytes: Uint8Array): Promise<void> { const owned = bytes.slice(); return this.transaction(writer => writer.write(path, owned)); }
+  remove(path: string): Promise<void> { return this.transaction(writer => writer.remove(path)); }
+  writeFixture(path: string, bytes: Uint8Array): Promise<void> { const owned = bytes.slice(); return this.transaction(writer => writer.writeFixture(path, owned)); }
+  removeFixture(path: string): Promise<void> { return this.transaction(writer => writer.removeFixture(path)); }
+  replace(files: FileMap, fixtures?: FileMap): Promise<void> {
+    const ownedFiles = copyFiles(files), ownedFixtures = fixtures && copyFiles(fixtures);
+    return this.transaction(writer => writer.replace(ownedFiles, ownedFixtures));
+  }
 }
 
 export class Stage {
@@ -195,14 +247,14 @@ export class Stage {
   readonly fixtureBaseline: FileMap;
   files: FileMap;
   fixtures: FileMap;
-  constructor(baseline: FileMap, revision: number, fixtureBaseline: FileMap = new Map()) { this.baseline = baseline; this.files = new Map(baseline); this.fixtureBaseline = fixtureBaseline; this.fixtures = new Map(fixtureBaseline); this.baseRevision = revision; }
+  constructor(baseline: FileMap, revision: number, fixtureBaseline: FileMap = new Map()) { this.baseline = copyFiles(baseline); this.files = copyFiles(baseline); this.fixtureBaseline = copyFiles(fixtureBaseline); this.fixtures = copyFiles(fixtureBaseline); this.baseRevision = revision; }
   list(): string[] { return [...this.files.keys()].sort(); }
   read(path: string): Uint8Array | undefined { return this.files.get(path); }
   text(path: string): string { return toText(this.files.get(path) || new Uint8Array()); }
   write(path: string, text: string): void { this.writeBytes(path, toBytes(text)); }
-  writeBytes(path: string, bytes: Uint8Array): void { if (!validProjectPath(path)) throw new Error('Invalid project path'); this.files.set(path, bytes); }
+  writeBytes(path: string, bytes: Uint8Array): void { if (!validProjectPath(path)) throw new Error('Invalid project path'); this.files.set(path, bytes.slice()); }
   remove(path: string): void { if (!validProjectPath(path)) throw new Error('Invalid project path'); this.files.delete(path); }
-  writeFixtureBytes(path: string, bytes: Uint8Array): void { if (!validFixturePath(path)) throw new Error('Invalid fixture path'); this.fixtures.set(path, bytes); }
+  writeFixtureBytes(path: string, bytes: Uint8Array): void { if (!validFixturePath(path)) throw new Error('Invalid fixture path'); this.fixtures.set(path, bytes.slice()); }
   readBaseline(path: string): Uint8Array | undefined { return (validFixturePath(path) ? this.fixtureBaseline : this.baseline).get(path); }
   readCurrent(path: string): Uint8Array | undefined { return (validFixturePath(path) ? this.fixtures : this.files).get(path); }
   changes(): string[] {
