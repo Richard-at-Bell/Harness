@@ -108,6 +108,7 @@ export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[
 }
 
 export type AgentCallbacks = ToolOptions & {
+  signal?: AbortSignal;
   onText: (text: string) => void;
   onTool: (line: ToolLine) => void;
 };
@@ -129,7 +130,7 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
   });
   let streamed = '';
   const activeTools = new Map<string, { line: ToolLine; started: number }>();
-  agent.subscribe(event => {
+  const unsubscribe = agent.subscribe(event => {
     if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
       streamed += event.assistantMessageEvent.delta;
       callbacks.onText(streamed);
@@ -146,7 +147,14 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
       activeTools.delete(event.toolCallId);
     }
   });
-  await agent.prompt(prompt);
+  const onAbort = () => agent.abort();
+  callbacks.signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    if (callbacks.signal?.aborted) throw new Error('Agent turn cancelled');
+    await agent.prompt(prompt);
+  } finally {
+    unsubscribe(); callbacks.signal?.removeEventListener('abort', onAbort);
+  }
   const last = [...agent.state.messages].reverse().find(message => message.role === 'assistant');
   if (!last || last.role !== 'assistant') throw new Error(agent.state.errorMessage || 'Model returned no assistant response');
   if (last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last.errorMessage || agent.state.errorMessage || `Model stopped: ${last.stopReason}`);
