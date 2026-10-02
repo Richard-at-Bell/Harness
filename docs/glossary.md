@@ -15,6 +15,8 @@ Status: **Draft for review**
 | **Turn** | One user request and the agent's resulting messages and tool activity until it settles. |
 | **Checkpoint** | A recoverable workspace state captured before a change set. |
 | **Staged change** | An agent file change awaiting user acceptance. It does not become the accepted project until reviewed. |
+| **Review changes** | The browser preference that chooses whether agent edits wait for acceptance. It defaults to on and is locked during an active turn or pending review. |
+| **Automatic application** | With review off, each successful agent file or fixture mutation is saved immediately and shown in the preview. Earlier successful edits remain applied if the turn later fails. |
 | **Accepted revision** | The current project state used by the live preview and ZIP export. |
 | **Revision** | An identifier for a particular file, table, or workspace state, used to detect stale writes. |
 | **Diff** | The before/after view of changed text files for a turn or checkpoint. |

@@ -50,7 +50,9 @@ Status: **Draft for review** · 2026-09-28
 
 ## D-008: Agent change approval
 
-**Proposed:** One checkpoint per agent turn. Show the complete file diff and let the user accept or revert that turn. The preview uses accepted files. Manual edits save directly and create their own checkpoint.
+**Implemented default:** Review changes is on. Each agent turn stages its file and fixture edits, opens a diff, and waits for acceptance or discard. The switch above the chat input can turn review off. In that mode, every successful mutation is saved immediately and reflected in the preview, so another prompt can run without an acceptance step.
+
+The setting is stored in this browser's IndexedDB, separately from chats and exported projects. It is fixed for the duration of a turn and while changes await review. Automatic edits update only the affected path and reject a write if that path changed during the tool operation. Successful edits remain applied if a later tool or model request fails. There is no automatic undo checkpoint yet; chat and tool activity remain available in both modes.
 
 **Review question:** Should the preview optionally run staged agent changes before acceptance? This can be added later without changing the file format.
 

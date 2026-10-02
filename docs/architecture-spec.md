@@ -19,7 +19,7 @@ Vercel static assets
 User key ── Pi model provider request
 ```
 
-The workspace service writes project files and Studio fixtures to separate OPFS roots. Monaco, agent tools, fixture operations, preview data writes, and export all use it. It maintains one accepted revision and, during an agent turn, a staged branch based on that revision. Multiple chats share these files but keep separate conversation state.
+The workspace service writes project files and Studio fixtures to separate OPFS roots. Monaco, agent tools, fixture operations, preview data writes, and export all use it. Review is on by default: an agent turn works in a staged branch based on the accepted revision. With review off, each successful mutation advances the accepted workspace immediately. Multiple chats share these files but keep separate conversation state.
 
 ## Workspace contract
 
@@ -46,7 +46,7 @@ interface WorkspaceStage {
 }
 ```
 
-`expectedRevision` rejects stale writes. Agent tools see their staged branch, including their earlier edits in the same turn. Acceptance atomically advances the accepted revision only when its base is still current; otherwise the user sees a conflict and can review again. The UI labels changes from the user, agent, fixture editor, or preview.
+`expectedRevision` rejects stale writes. In review mode, agent tools see their staged branch, including their earlier edits in the same turn. Acceptance atomically advances the accepted revision only when its base is still current; otherwise the user sees a conflict and can review again. The UI labels changes from the user, agent, fixture editor, or preview.
 
 OPFS stores project bytes and Studio fixture bytes in separate roots. IndexedDB stores chats, tool events, and active chat selection. Each chat keeps its own Pi context and model selection; the project and fixtures are shared. Browser storage remains subject to quota and deletion by the browser or user; export is the durable handoff. Atomic journaling remains a planned improvement.
 
@@ -54,7 +54,9 @@ OPFS stores project bytes and Studio fixture bytes in separate roots. IndexedDB 
 
 Use `@earendil-works/pi-agent-core` for the browser tool loop and `@earendil-works/pi-ai` for supported provider calls. The full `pi-coding-agent` SDK embeds in Node/Bun, so its default shell and file tools are not the browser implementation. Define a small, versioned set of custom tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `list_tables`, `read_table`, and `write_table`. Project file tools do not expose fixture bytes. The agent cannot invoke a shell in the first release.
 
-Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. The agent can inspect current files, but its writes are staged for the user's review. Accept commits the staged revision; revert discards that branch. New user edits made during an active turn trigger a revision conflict instead of an automatic overwrite.
+Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. With review on, writes stay staged; acceptance applies the turn only if its starting revision remains current. With review off, tools refresh their view from the workspace before execution, then await persistence of the affected path before reporting success. Fixture commits share the preview mutation queue, and each commit compares the current bytes with the tool's starting bytes to detect a concurrent edit. Other files are preserved. Successful automatic edits remain applied if a later part of the turn fails.
+
+The review preference lives in IndexedDB separately from session records. It defaults to on, survives reload, and cannot change during a running turn or pending review. The agent's system instructions describe the selected mode. Both modes retain chat and tool activity; automatic mode does not create a pending diff or block the next prompt.
 
 The key is entered by the user and held in session memory by default. It is passed only to the model request path. The studio never intentionally writes it to workspace files, preview messages, telemetry, logs, or ZIPs. Imported `.env` and credential files are rejected; known key values are redacted from chat/tool exports. Users can still type other secrets into project content, so export includes a content review step. If a provider cannot be called from the browser due to its network or authentication rules, the UI reports that provider as unsupported for this deployment; it does not expose a platform key.
 

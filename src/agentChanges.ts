@@ -1,0 +1,23 @@
+import { validFixturePath, type Workspace } from './workspace';
+
+export type AgentChange = { path: string; before?: Uint8Array; after?: Uint8Array };
+type ChangeWorkspace = Pick<Workspace, 'files' | 'fixtures' | 'write' | 'remove' | 'writeFixture' | 'removeFixture'>;
+
+function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
+  return a && b ? a.length === b.length && a.every((byte, index) => byte === b[index]) : a === b;
+}
+
+export async function applyAgentChange(workspace: ChangeWorkspace, change: AgentChange): Promise<boolean> {
+  const fixture = validFixturePath(change.path);
+  const current = (fixture ? workspace.fixtures : workspace.files).get(change.path);
+  if (!sameBytes(current, change.before)) throw new Error(`${change.path} changed while the agent was editing it. Read it again before retrying.`);
+  if (sameBytes(current, change.after)) return false;
+  if (change.after) {
+    if (fixture) await workspace.writeFixture(change.path, change.after);
+    else await workspace.write(change.path, change.after);
+  } else {
+    if (fixture) await workspace.removeFixture(change.path);
+    else await workspace.remove(change.path);
+  }
+  return true;
+}

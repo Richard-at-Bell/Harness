@@ -15,6 +15,11 @@ describe('model picker', () => {
   it('formats live per-token prices as rates per million', () => {
     expect(pricePerMillion('0.000002')).toBe('$2');
     expect(pricePerMillion('0.00000005')).toBe('$0.05');
+    expect(pricePerMillion('0.000000005')).toBe('$0.005');
+    expect(pricePerMillion('0')).toBe('$0');
+    expect(pricePerMillion('')).toBeUndefined();
+    expect(pricePerMillion('-0.000001')).toBeUndefined();
+    expect(pricePerMillion('unknown')).toBeUndefined();
     expect(pricePerMillion(undefined)).toBeUndefined();
   });
 });

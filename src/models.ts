@@ -32,7 +32,8 @@ export function modelName(id: string): string {
 }
 
 export function pricePerMillion(value?: string): string | undefined {
+  if (value == null || !value.trim()) return undefined;
   const price = Number(value) * 1_000_000;
-  if (!Number.isFinite(price) || price < 0 || value == null) return undefined;
-  return `$${price < 1 ? price.toFixed(2) : price.toFixed(2).replace(/\.00$/, '')}`;
+  if (!Number.isFinite(price) || price < 0) return undefined;
+  return `$${new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 }).format(price)}`;
 }

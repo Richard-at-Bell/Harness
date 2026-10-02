@@ -62,6 +62,14 @@ export async function saveSession(session: SavedSession): Promise<void> {
   await db.put('meta', session, 'session-v2');
 }
 
+export async function loadReviewChanges(): Promise<boolean> {
+  return (await (await metaDb()).get('meta', 'review-agent-changes')) !== false;
+}
+
+export async function saveReviewChanges(enabled: boolean): Promise<void> {
+  await (await metaDb()).put('meta', enabled, 'review-agent-changes');
+}
+
 async function storageRoots(): Promise<{ project: FileSystemDirectoryHandle; fixtures: FileSystemDirectoryHandle }> {
   if (!navigator.storage?.getDirectory) throw new Error('This browser does not support local project storage. Use a current desktop Chromium browser.');
   const root = await navigator.storage.getDirectory();

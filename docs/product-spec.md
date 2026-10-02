@@ -12,8 +12,8 @@ The studio application is TypeScript. Projects created in the studio use HTML, C
 
 1. **Create or import.** Choose the to-do template, a blank static site, or a ZIP containing supported project files. The studio creates a browser-local workspace and a baseline checkpoint.
 2. **Configure a model.** Select a supported provider and enter a personal API key. The key stays outside project files, logs, and the exported ZIP. The UI verifies that the provider can be called from the browser before a chat starts.
-3. **Work with the agent.** The user can create and switch named chats. Each chat keeps its own model and context while sharing the same project and Studio data. The agent reads files and proposes edits through the workspace tool API. The chat shows tool actions and errors. A complete agent turn produces a reviewable diff against its starting checkpoint.
-4. **Review.** The user accepts the turn or reverts its file changes. Manual Monaco edits are saved directly and remain visible in subsequent diffs.
+3. **Work with the agent.** The user can create and switch named chats. Each chat keeps its own model and context while sharing the same project and Studio data. The agent reads files and edits through the workspace tool API. The chat shows tool actions and errors in both modes.
+4. **Choose review behavior.** Review changes is on by default: each turn produces a diff that the user accepts or discards. Turning the switch off applies successful file and fixture edits immediately, with no review step. The switch remembers its setting in this browser and stays locked during a turn or pending review. Manual Monaco edits save directly.
 5. **Preview.** The preview reloads from the current accepted workspace after file edits. The user can interact with the to-do app. Preview errors and console messages appear in a studio panel without giving the preview access to model credentials or the studio DOM.
 6. **Work with data.** The user views the `todos` table in Studio data, generates a seeded example, imports CSV/XLSX, and chooses a file format. The preview can read and change rows through a narrow data bridge. Changes are reflected in Studio fixture files and in the final ZIP.
 7. **Export and resume.** Download a ZIP with the project, Studio fixtures, all chat transcripts and tool logs, and manifest. Importing that ZIP restores the project and chat history supported by the manifest version.
@@ -30,8 +30,8 @@ Example prompt: “Make completed tasks move to the bottom and add a count of op
 | --- | --- | --- |
 | P-01 | Create the reference project | The to-do app opens and works in preview with fixture rows. |
 | P-02 | Edit HTML, CSS, and JS | Monaco saves edits; preview shows them without a full studio reload. |
-| P-03 | Agent file edits | An agent can list, read, create, edit, and delete allowed workspace files; each turn has a diff and tool record. |
-| P-04 | Review and recovery | Accept/revert works for an agent turn; reload restores accepted files and chat. |
+| P-03 | Agent file edits | An agent can list, read, create, edit, and delete allowed workspace files; tool activity is recorded in both modes and review mode produces a diff. |
+| P-04 | Optional review | Accept/discard works with review on; review off applies edits as tools finish; reload restores accepted files, chat, and the review preference. |
 | P-05 | Table fixtures | Import, generate, inspect, and edit a table; CSV and XLSX have the constrained behavior in the fixture spec. |
 | P-06 | Preview table writes | Adding or toggling a to-do row changes the workspace table and survives a studio reload. |
 | P-07 | Portable output | The ZIP contains a runnable static project, Studio fixture files, every chat and log, and a versioned manifest. |
@@ -41,7 +41,7 @@ Example prompt: “Make completed tasks move to the bottom and add a count of op
 ## Quality targets
 
 - A new user can reach a working to-do preview from the template in under a minute, excluding model setup.
-- A bad agent edit never destroys the accepted checkpoint. A failed import or export leaves the existing workspace intact.
+- With review on, agent edits leave the accepted workspace unchanged until acceptance. With review off, successful edits remain applied even if the turn later fails. A failed import or export leaves the existing workspace intact.
 - Browser refresh preserves accepted source files, fixture changes, and completed chat turns.
 - The first release targets current desktop Chromium. Other browser support is a separate compatibility pass because preview and local file APIs differ across browsers.
 - Export is useful without a studio account. It contains no API key and no hidden dependency on the studio service.

@@ -9,15 +9,18 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import { ArrowDownToLine, ArrowRight, Check, ChevronDown, Code2, FileCode2, FilePlus2, FileSpreadsheet, FolderOpen, KeyRound, LayoutPanelLeft, MessageSquareText, PanelRightClose, Play, Plus, RefreshCw, RotateCcw, Send, Sparkles, Trash2, X } from 'lucide-react';
 import { runAgent } from './agent';
+import { applyAgentChange } from './agentChanges';
 import { ActivityPanel } from './ActivityPanel';
 import { ChatSwitcher } from './ChatSwitcher';
 import { DiffReview } from './DiffReview';
-import { loadLiveModels, MODEL_CHOICES, modelName, pricePerMillion, type LiveModel } from './models';
+import { ReviewToggle } from './ReviewToggle';
+import { ModelPicker } from './ModelPicker';
+import { modelName } from './models';
 import { exportZip, importZip } from './export';
 import { fixtureIds, generateRows, readTable, tableBytes, type Row, type Table } from './fixtures';
 import { buildPreview, codeSignature } from './preview';
 import { templateFiles, templateFixtures } from './template';
-import { loadSession, newStudioChat, saveSession, Stage, titleForChat, toBytes, toText, validProjectPath, Workspace, type ChatLine, type FileMap, type StudioChat, type ToolLine } from './workspace';
+import { loadReviewChanges, loadSession, newStudioChat, saveReviewChanges, saveSession, Stage, titleForChat, toBytes, toText, validProjectPath, Workspace, type ChatLine, type FileMap, type StudioChat, type ToolLine } from './workspace';
 import './styles.css';
 
 self.MonacoEnvironment = {
@@ -74,12 +77,11 @@ function App() {
   const [prompt, setPrompt] = useState('');
   const [key, setKey] = useState('');
   const modelId = activeChat.modelId;
-  const [liveModels, setLiveModels] = useState<Map<string, LiveModel> | null>(null);
-  const [catalogError, setCatalogError] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newItem, setNewItem] = useState<'file' | 'table' | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reviewChanges, setReviewChanges] = useState(true);
   const [pending, setPending] = useState<Stage | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffPath, setDiffPath] = useState('');
@@ -99,17 +101,17 @@ function App() {
   function setChat(value: SetStateAction<ChatLine[]>) { updateActive(current => ({ ...current, chat: typeof value === 'function' ? value(current.chat) : value })); }
   function setTools(value: SetStateAction<ToolLine[]>) { updateActive(current => ({ ...current, tools: typeof value === 'function' ? value(current.tools) : value })); }
   function setHistory(value: SetStateAction<unknown[]>) { updateActive(current => ({ ...current, agentMessages: typeof value === 'function' ? value(current.agentMessages) : value })); }
-  function setModelId(value: string) { updateActive(current => ({ ...current, modelId: value })); }
 
   useEffect(() => {
     let active = true;
-    Promise.all([Workspace.open(), loadSession()]).then(([workspace, session]) => {
+    Promise.all([Workspace.open(), loadSession(), loadReviewChanges()]).then(([workspace, session, review]) => {
       if (!active) return;
       workspaceRef.current = workspace;
       setFiles(workspace.snapshot());
       setFixtures(workspace.fixtureSnapshot());
       setChats(session.chats);
       setActiveChatId(session.activeChatId);
+      setReviewChanges(review);
       setReady(true);
     }).catch(error => setNotice(String(error.message || error)));
     return () => { active = false; };
@@ -120,6 +122,10 @@ function App() {
     const timer = window.setTimeout(() => { saveSession({ version: 2, chats, activeChatId }).catch(console.error); }, 350);
     return () => window.clearTimeout(timer);
   }, [ready, chats, activeChatId]);
+
+  useEffect(() => {
+    if (ready) saveReviewChanges(reviewChanges).catch(error => setNotice(`Could not save review preference: ${String(error)}`));
+  }, [ready, reviewChanges]);
 
   const signature = useMemo(() => codeSignature(files), [files]);
   useEffect(() => {
@@ -139,15 +145,6 @@ function App() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [chat, busy]);
 
   useEffect(() => () => { if (exportUrl) URL.revokeObjectURL(exportUrl); }, [exportUrl]);
-
-  useEffect(() => {
-    if (!settingsOpen || liveModels) return;
-    const controller = new AbortController();
-    loadLiveModels(controller.signal).then(models => { setLiveModels(models); setCatalogError(''); }).catch(error => {
-      if (!controller.signal.aborted) setCatalogError(String(error instanceof Error ? error.message : error));
-    });
-    return () => controller.abort();
-  }, [settingsOpen, liveModels]);
 
   useEffect(() => {
     if (!pending || !diffPath) return;
@@ -210,9 +207,10 @@ function App() {
     if (id) frameRef.current?.contentWindow?.postMessage({ kind: 'table.changed', table: id, token: tokenRef.current }, '*');
   };
   const chooseModel = (id: string) => {
-    if (id === modelId) return;
-    setModelId(id);
-    setHistory([]);
+    if (busy || pending || id === modelId) return;
+    const next = chats.map(item => item.id === activeChatId ? { ...item, modelId: id, agentMessages: [], updatedAt: new Date().toISOString() } : item);
+    setChats(next);
+    saveSession({ version: 2, chats: next, activeChatId }).catch(error => setNotice(`Could not save model choice: ${String(error)}`));
   };
   const switchChat = (id: string) => {
     if (busy || pending || id === activeChatId) return;
@@ -247,6 +245,8 @@ function App() {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const stage = workspace.stage();
+    const reviewThisTurn = reviewChanges;
+    let appliedChanges = 0;
     const answerId = crypto.randomUUID();
     setPrompt(''); setBusy(true);
     if (!chat.length && /^New chat(?: \d+)?$/.test(activeChat.title)) updateActive(current => ({ ...current, title: titleForChat(text) }));
@@ -255,13 +255,27 @@ function App() {
       const outcome = await runAgent(text, key.trim(), modelId.trim(), stage, history, {
         onText: value => setChat(current => current.map(line => line.id === answerId ? { ...line, text: value } : line)),
         onTool: line => setTools(current => [...current.filter(item => item.id !== line.id), line]),
+        beforeTool: reviewThisTurn ? undefined : async () => {
+          await bridgeQueueRef.current;
+          stage.files = workspace.snapshot(); stage.fixtures = workspace.fixtureSnapshot();
+        },
+        onChange: reviewThisTurn ? undefined : async change => {
+          const apply = async () => {
+            if (await applyAgentChange(workspace, change)) appliedChanges++;
+            setFiles(workspace.snapshot()); setFixtures(workspace.fixtureSnapshot()); notifyTable(change.path);
+          };
+          const commit = bridgeQueueRef.current.then(apply, apply);
+          bridgeQueueRef.current = commit.catch(() => {});
+          await commit;
+        },
       });
       setChat(current => current.map(line => line.id === answerId ? { ...line, text: outcome.text || 'Done.' } : line));
       setHistory(outcome.messages);
-      if (stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
+      if (reviewThisTurn && stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
+      else if (appliedChanges) flash('Agent changes applied automatically.');
     } catch (error) {
       setChat(current => current.map(line => line.id === answerId ? { ...line, text: `Agent error: ${String(error instanceof Error ? error.message : error)}` } : line));
-      if (stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
+      if (reviewThisTurn && stage.changes().length) { setPending(stage); setDiffPath(stage.changes()[0]); setDiffOpen(true); }
     } finally { setBusy(false); }
   }
 
@@ -369,7 +383,7 @@ function App() {
         <button className="text-button" onClick={() => importRef.current?.click()} title="Import ZIP"><FolderOpen size={16} /> Import</button>
         <button className="text-button" onClick={exportProject} disabled={!ready || exportBusy} title="Export project, fixtures, and chats"><ArrowDownToLine size={16} /> {exportBusy ? 'Preparing ZIP…' : 'Export ZIP'}</button>
         {!rightOpen && <button className="top-icon mobile-agent-button" onClick={() => setRightOpen(true)} title="Open agent"><Sparkles size={17} /></button>}
-        <button className="top-icon" onClick={() => setSettingsOpen(true)} title="Model settings"><KeyRound size={17} /></button>
+        <button className="top-icon" onClick={() => setSettingsOpen(true)} title="API key settings"><KeyRound size={17} /></button>
         <input ref={importRef} type="file" accept=".zip" hidden onChange={event => { const file = event.target.files?.[0]; if (file) importProject(file); event.target.value = ''; }} />
         <input ref={tableImportRef} type="file" accept=".csv,.xlsx" hidden onChange={event => { const file = event.target.files?.[0]; if (file) importTable(file); event.target.value = ''; }} />
       </div>
@@ -397,13 +411,13 @@ function App() {
 
       {rightOpen ? <aside className="agent-pane"><div className="agent-header"><div className="agent-header-top"><div><div className="agent-title"><Sparkles size={16} /> Agent</div><span>Build with your workspace</span></div><button onClick={() => setRightOpen(false)} title="Hide agent"><PanelRightClose size={18} /></button></div><ChatSwitcher chats={chats} activeId={activeChatId} locked={busy || Boolean(pending)} onSelect={switchChat} onNew={createChat} onRename={renameChat} /></div>
         <div className="agent-scroll">
-          {!chat.length && <div className="empty-chat"><div className="empty-chat-icon"><MessageSquareText size={21} /></div><h2>What should we make?</h2><p>Ask the agent to shape your project. Every file change is yours to review.</p><div className="suggestions"><button onClick={() => setPrompt('Add a priority field to tasks and show high-priority tasks first.')}>Add task priorities <ArrowRight size={14} /></button><button onClick={() => setPrompt('Make the to-do app work well on small screens.')}>Improve mobile layout <ArrowRight size={14} /></button><button onClick={() => setPrompt('Add a filter for all, open, and completed tasks.')}>Add task filters <ArrowRight size={14} /></button></div></div>}
+          {!chat.length && <div className="empty-chat"><div className="empty-chat-icon"><MessageSquareText size={21} /></div><h2>What should we make?</h2><p>Ask the agent to shape your project. {reviewChanges ? 'Review each turn before applying it.' : 'Edits apply automatically as the agent works.'}</p><div className="suggestions"><button onClick={() => setPrompt('Add a priority field to tasks and show high-priority tasks first.')}>Add task priorities <ArrowRight size={14} /></button><button onClick={() => setPrompt('Make the to-do app work well on small screens.')}>Improve mobile layout <ArrowRight size={14} /></button><button onClick={() => setPrompt('Add a filter for all, open, and completed tasks.')}>Add task filters <ArrowRight size={14} /></button></div></div>}
           {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : line.model ? modelName(line.model) : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
           <ActivityPanel tools={tools} />
           {pending && <div className="pending-card"><div className="pending-top"><span><span className="pending-dot" /> REVIEW CHANGES</span><strong>{changed.length} {changed.length === 1 ? 'file' : 'files'}</strong></div><div className="pending-files">{changed.map(path => <button key={path} onClick={() => { setDiffPath(path); setDiffOpen(true); }}>{iconFor(path)} {path} <ArrowRight size={13} /></button>)}</div><div className="pending-actions"><button onClick={rejectStage}>Discard</button><button className="accept" onClick={acceptStage}><Check size={14} /> Accept changes</button></div></div>}
           <div ref={bottomRef} />
         </div>
-        <div className="composer"><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><button className="model-button" onClick={() => setSettingsOpen(true)}><span className={key ? 'model-dot ready' : 'model-dot'} /> {modelName(modelId)} <ChevronDown size={13} /></button><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p>{key ? 'Agent changes are staged for your review.' : 'Add an OpenRouter key in model settings to start.'}</p></div>
+        <div className="composer"><ReviewToggle enabled={reviewChanges} locked={!ready || busy || Boolean(pending)} onChange={setReviewChanges} /><div className="composer-box"><textarea placeholder="Ask the agent to edit your project…" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} rows={3} /><div className="composer-bottom"><ModelPicker key={activeChatId} modelId={modelId} connected={Boolean(key)} locked={!ready || busy || Boolean(pending)} onSelect={chooseModel} /><button className="send-button" disabled={!prompt.trim() || busy} onClick={sendPrompt} title="Send"><Send size={16} /></button></div></div><p id="agent-edit-policy">{reviewChanges ? 'Changes wait for your acceptance.' : 'Edits apply as the agent works.'}{!key && ' Add a key using the key icon to start.'}</p></div>
       </aside> : <button className="agent-reopen" onClick={() => setRightOpen(true)}><Sparkles size={17} /> Agent</button>}
     </div>
 
@@ -416,25 +430,12 @@ function App() {
     </div>}
 
     {settingsOpen && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
-      <div className="settings-modal model-modal">
-        <div className="modal-head"><div><span className="section-kicker">MODEL CONNECTION</span><h2>Choose an agent model</h2></div><button onClick={() => setSettingsOpen(false)} title="Close"><X size={20} /></button></div>
-        <p>Choose a tool-capable OpenRouter model. Prices update from OpenRouter when available.</p>
-        <div className="model-catalog-status">{liveModels ? 'Live availability and prices' : catalogError ? 'Live catalog unavailable; curated models remain selectable' : 'Checking live availability and prices…'}</div>
-        <div className="model-options">{MODEL_CHOICES.map(choice => {
-          const live = liveModels?.get(choice.id);
-          const input = pricePerMillion(live?.pricing?.prompt);
-          const output = pricePerMillion(live?.pricing?.completion);
-          return <button key={choice.id} type="button" className={`model-option ${modelId === choice.id ? 'selected' : ''}`} disabled={Boolean(liveModels && !live)} onClick={() => chooseModel(choice.id)} aria-pressed={modelId === choice.id}>
-            <span className="model-option-top"><strong>{choice.name}</strong><span className="model-badge">{choice.badge}</span></span>
-            <span className="model-maker">{choice.maker} · {choice.id}</span>
-            <span className="model-description">{choice.description}</span>
-            <span className="model-price">{liveModels && !live ? 'Unavailable on OpenRouter' : input && output ? `${input} in / ${output} out per 1M tokens` : 'Pricing loads from OpenRouter'}</span>
-          </button>;
-        })}</div>
-        <details className="model-custom"><summary>Use another model ID</summary><label>OpenRouter model ID<input value={modelId} onChange={event => chooseModel(event.target.value)} spellCheck={false} /></label></details>
+      <div className="settings-modal" role="dialog" aria-modal="true" aria-label="API key settings">
+        <div className="modal-head"><div><span className="section-kicker">MODEL CONNECTION</span><h2>OpenRouter key</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Close key settings"><X size={20} /></button></div>
+        <p>Use your own OpenRouter key to run the agent.</p>
         <label>API key<input type="password" value={key} placeholder="sk-or-v1-…" onChange={event => setKey(event.target.value)} autoComplete="off" /></label>
-        <p className="model-footnote">The key stays in this tab. Changing models starts fresh agent context while keeping your project and visible chat.</p>
-        <div className="modal-actions"><button className="primary-small" onClick={() => setSettingsOpen(false)}><Check size={15} /> Use {modelName(modelId)}</button></div>
+        <p>The key stays in this tab and is excluded from the project and ZIP.</p>
+        <div className="modal-actions"><button className="primary-small" onClick={() => setSettingsOpen(false)}><Check size={15} /> Done</button></div>
       </div>
     </div>}
 

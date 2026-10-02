@@ -4,8 +4,9 @@ import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
 import { fixtureIds, readTable, tableBytes, type Row } from './fixtures';
 import { DEFAULT_MODEL } from './models';
 import { finishedTool, startedTool } from './toolActivity';
+import type { AgentChange } from './agentChanges';
 import type { Stage, ToolLine } from './workspace';
-import { toText } from './workspace';
+import { toText, validFixturePath } from './workspace';
 
 export { DEFAULT_MODEL };
 
@@ -13,7 +14,19 @@ const systemPrompt = `You are the coding agent in a browser project studio. The 
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
-export function createTools(stage: Stage): AgentTool[] {
+type ToolOptions = { beforeTool?: () => Promise<void>; onChange?: (change: AgentChange) => Promise<void> };
+
+export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[] {
+  async function change(path: string, update: () => void) {
+    const before = stage.readCurrent(path);
+    update();
+    try { await options.onChange?.({ path, before, after: stage.readCurrent(path) }); }
+    catch (error) {
+      const files = validFixturePath(path) ? stage.fixtures : stage.files;
+      if (before) files.set(path, before); else files.delete(path);
+      throw error;
+    }
+  }
   const list: AgentTool = {
     name: 'list_files', label: 'List files', description: 'List all project-relative paths.', parameters: Type.Object({}),
     async execute() { return result(stage.list().join('\n')); },
@@ -35,7 +48,7 @@ export function createTools(stage: Stage): AgentTool[] {
   };
   const write: AgentTool = {
     name: 'write_file', label: 'Write file', description: 'Create or replace a UTF-8 project file. Use for complete new files or substantial rewrites.', parameters: Type.Object({ path: Type.String(), content: Type.String() }), executionMode: 'sequential',
-    async execute(_id, input) { const { path, content } = input as { path: string; content: string }; if (path.endsWith('.xlsx')) throw new Error('Use write_table for XLSX fixtures'); stage.write(path, content); return result(`Wrote ${path} (${content.length} characters).`); },
+    async execute(_id, input) { const { path, content } = input as { path: string; content: string }; if (path.endsWith('.xlsx')) throw new Error('Use write_table for XLSX fixtures'); await change(path, () => stage.write(path, content)); return result(`Wrote ${path} (${content.length} characters).`); },
   };
   const edit: AgentTool = {
     name: 'edit_file', label: 'Edit file', description: 'Replace one exact text occurrence in an existing UTF-8 file.', parameters: Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() }), executionMode: 'sequential',
@@ -48,13 +61,13 @@ export function createTools(stage: Stage): AgentTool[] {
       const first = original.indexOf(oldText);
       if (first < 0) throw new Error('Exact text was not found');
       if (original.indexOf(oldText, first + oldText.length) >= 0) throw new Error('Exact text occurs more than once');
-      stage.write(path, original.slice(0, first) + newText + original.slice(first + oldText.length));
+      await change(path, () => stage.write(path, original.slice(0, first) + newText + original.slice(first + oldText.length)));
       return result(`Edited ${path}.`);
     },
   };
   const remove: AgentTool = {
     name: 'delete_file', label: 'Delete file', description: 'Remove a project file by relative path.', parameters: Type.Object({ path: Type.String() }), executionMode: 'sequential',
-    async execute(_id, input) { const { path } = input as { path: string }; if (!stage.read(path)) throw new Error(`File not found: ${path}`); stage.remove(path); return result(`Deleted ${path}.`); },
+    async execute(_id, input) { const { path } = input as { path: string }; if (!stage.read(path)) throw new Error(`File not found: ${path}`); await change(path, () => stage.remove(path)); return result(`Deleted ${path}.`); },
   };
   const readTableTool: AgentTool = {
     name: 'read_table', label: 'Read fixture table', description: 'Read a CSV or XLSX fixture by table name. Returns columns and rows as JSON.', parameters: Type.Object({ table: Type.String() }),
@@ -82,15 +95,19 @@ export function createTools(stage: Stage): AgentTool[] {
           return [column, (value ?? null) as Row[string]];
         }));
       });
-      stage.writeFixtureBytes(current.path, await tableBytes({ ...current, rows: clean }));
+      const bytes = await tableBytes({ ...current, rows: clean });
+      await change(current.path, () => stage.writeFixtureBytes(current.path, bytes));
       const saved = await readTable(stage.fixtures, table);
       return result(`Wrote ${clean.length} rows to ${current.path}. Columns: ${saved.columns.join(', ')}.`);
     },
   };
-  return [list, listTables, read, write, edit, remove, readTableTool, writeTableTool];
+  return [list, listTables, read, write, edit, remove, readTableTool, writeTableTool].map(tool => ({
+    ...tool,
+    async execute(...args: Parameters<AgentTool['execute']>) { await options.beforeTool?.(); return tool.execute(...args); },
+  }));
 }
 
-export type AgentCallbacks = {
+export type AgentCallbacks = ToolOptions & {
   onText: (text: string) => void;
   onTool: (line: ToolLine) => void;
 };
@@ -106,7 +123,7 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
     ? { ...listedModel, api: 'openai-completions' as const, baseUrl: 'https://openrouter.ai/api/v1', compat: { thinkingFormat: 'openrouter' as const } }
     : listedModel;
   const agent = new Agent({
-    initialState: { systemPrompt, model, tools: createTools(stage), messages: prior.length ? prior as AgentMessage[] : undefined },
+    initialState: { systemPrompt: `${systemPrompt}\n${callbacks.onChange ? 'Review is off. Each successful edit is applied immediately to the project and live preview.' : 'Review is on. Your edits are staged until the user accepts the turn.'}`, model, tools: createTools(stage, callbacks), messages: prior.length ? prior as AgentMessage[] : undefined },
     streamFn: (selected, context, options) => models.streamSimple(selected, context, { ...options, apiKey: key }),
     toolExecution: 'sequential',
   });
