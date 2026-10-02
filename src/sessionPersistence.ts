@@ -21,11 +21,17 @@ export function persistSession(session: StudioSession, storage: Persistence = { 
     }).catch(error => session.notice(`Could not save session: ${String(error)}`));
     return queue;
   };
-  const unsubscribe = session.store.subscribe(next => {
+  let unsubscribe: (() => void) | undefined;
+  const start = () => {
+    if (unsubscribe) return;
+    last = session.store.getState();
+    unsubscribe = session.store.subscribe(next => {
     const changed = next.chats !== last.chats || next.activeChatId !== last.activeChatId || next.reviewChanges !== last.reviewChanges;
     last = next;
     if (!changed) return;
     dirty = true; clearTimeout(timer); timer = setTimeout(flush, delay);
-  });
-  return { flush, stop() { unsubscribe(); return flush(); } };
+    });
+  };
+  start();
+  return { start, flush, stop() { unsubscribe?.(); unsubscribe = undefined; return flush(); } };
 }

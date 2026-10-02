@@ -51,5 +51,9 @@ describe('chat identity and session lifecycle', () => {
     session.renameChat(a.id, 'Ignored');
     release(); await Promise.all([first, second]);
     expect(saved).toEqual(['First', 'Second']);
+    persistence.start(); persistence.start();
+    session.renameChat(a.id, 'After restart');
+    await persistence.stop();
+    expect(saved).toEqual(['First', 'Second', 'After restart']);
   });
 });

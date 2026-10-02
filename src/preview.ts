@@ -1,4 +1,4 @@
-import type { FileMap } from './workspace';
+import type { FileSnapshot } from './workspace';
 import { toText } from './workspace';
 import { seedScript } from './fixtures';
 
@@ -13,7 +13,7 @@ function mime(path: string): string {
   if (path.endsWith('.svg')) return 'image/svg+xml';
   return 'application/octet-stream';
 }
-function dataUrl(files: FileMap, url: string): string | undefined {
+function dataUrl(files: FileSnapshot, url: string): string | undefined {
   const path = localPath(url);
   const bytes = files.get(path);
   if (!bytes || bytes.byteLength > 2_000_000) return undefined;
@@ -21,14 +21,14 @@ function dataUrl(files: FileMap, url: string): string | undefined {
   for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
   return `data:${mime(path)};base64,${btoa(binary)}`;
 }
-function inlineCss(files: FileMap, css: string): string {
+function inlineCss(files: FileSnapshot, css: string): string {
   return css.replace(/url\(\s*(['"]?)([^'"()]+)\1\s*\)/gi, (full, _quote, url) => {
     const embedded = dataUrl(files, url.trim());
     return embedded ? `url("${embedded}")` : full;
   });
 }
 
-export async function buildPreview(files: FileMap, fixtures: FileMap, token: string): Promise<string> {
+export async function buildPreview(files: FileSnapshot, fixtures: FileSnapshot, token: string): Promise<string> {
   let html = files.has('index.html') ? toText(files.get('index.html')!) : '<!doctype html><p>No index.html file</p>';
   const seed = await seedScript(fixtures);
   const support = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'">\n<script>window.__STUDIO_BRIDGE_TOKEN__=${JSON.stringify(token)};${escapeScript(seed)};window.addEventListener('error',event=>parent.postMessage({kind:'preview.error',token:window.__STUDIO_BRIDGE_TOKEN__,message:event.message},'*'));</script>`;
@@ -51,7 +51,7 @@ export async function buildPreview(files: FileMap, fixtures: FileMap, token: str
   return html;
 }
 
-export function codeSignature(files: FileMap): string {
+export function codeSignature(files: FileSnapshot): string {
   return [...files.entries()].map(([path, bytes]) => {
     let hash = 2166136261;
     for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);

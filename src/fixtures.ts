@@ -1,11 +1,11 @@
 import Papa from 'papaparse';
-import type { FileMap } from './workspace';
+import type { FileSnapshot } from './workspace';
 import { toBytes, toText } from './workspace';
 
 export type Row = Record<string, string | number | boolean | null>;
 export type Table = { path: string; columns: string[]; rows: Row[]; format: 'csv' | 'xlsx' };
 
-export function fixtureIds(files: FileMap): string[] {
+export function fixtureIds(files: FileSnapshot): string[] {
   return [...new Set([...files.keys()].map(path => /^fixtures\/([^/]+)\.(?:csv|xlsx)$/.exec(path)?.[1]).filter((id): id is string => Boolean(id)))].sort();
 }
 
@@ -26,11 +26,11 @@ export function generateRows(table: Table, seed: number, count: number): Row[] {
   });
 }
 
-export function tablePath(files: FileMap, id: string): string | undefined {
+export function tablePath(files: FileSnapshot, id: string): string | undefined {
   return [...files.keys()].find(path => path === `fixtures/${id}.csv` || path === `fixtures/${id}.xlsx`);
 }
 
-export async function readTable(files: FileMap, id: string): Promise<Table> {
+export async function readTable(files: FileSnapshot, id: string): Promise<Table> {
   const path = tablePath(files, id);
   if (!path) throw new Error(`Table “${id}” was not found`);
   const bytes = files.get(path)!;
@@ -81,7 +81,7 @@ export async function tableBytes(table: Table): Promise<Uint8Array> {
   return new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer);
 }
 
-export async function tableSeed(files: FileMap): Promise<Record<string, Row[]>> {
+export async function tableSeed(files: FileSnapshot): Promise<Record<string, Row[]>> {
   const seed: Record<string, Row[]> = {};
   for (const path of files.keys()) {
     const match = /^fixtures\/([^/]+)\.(csv|xlsx)$/.exec(path);
@@ -90,6 +90,6 @@ export async function tableSeed(files: FileMap): Promise<Record<string, Row[]>> 
   return seed;
 }
 
-export async function seedScript(files: FileMap): Promise<string> {
+export async function seedScript(files: FileSnapshot): Promise<string> {
   return `window.__FIXTURE_SEED__ = ${JSON.stringify(await tableSeed(files)).replaceAll('<', '\\u003c')};`;
 }

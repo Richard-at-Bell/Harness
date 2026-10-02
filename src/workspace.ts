@@ -4,6 +4,9 @@ import { templateFiles, templateFixtures } from './template';
 import { DEFAULT_MODEL } from './models';
 
 export type FileMap = Map<string, Uint8Array>;
+// Published maps and their byte values are read-only to consumers. Working
+// snapshots are deep copies; typed arrays cannot be frozen by JavaScript.
+export type FileSnapshot = ReadonlyMap<string, Uint8Array>;
 export type ChatLine = { id: string; role: 'user' | 'assistant' | 'system'; text: string; time: string; model?: string };
 export type ToolLine = { id: string; time: string; name: string; status: 'started' | 'ok' | 'error'; summary: string; input?: string; output?: string; durationMs?: number };
 export type StudioChat = { id: string; title: string; createdAt: string; updatedAt: string; chat: ChatLine[]; tools: ToolLine[]; agentMessages: unknown[]; modelId: string };
@@ -109,20 +112,20 @@ async function removeFile(root: FileSystemDirectoryHandle, path: string): Promis
   await dir.removeEntry(parts.at(-1)!);
 }
 
-export type WorkspaceSnapshot = { files: FileMap; fixtures: FileMap; revision: number };
+export type WorkspaceSnapshot = { readonly files: FileSnapshot; readonly fixtures: FileSnapshot; readonly revision: number };
 export type WorkspaceStorage = {
   write: (fixture: boolean, path: string, bytes: Uint8Array) => Promise<void>;
   remove: (fixture: boolean, path: string) => Promise<void>;
 };
 export type WorkspaceWriter = Pick<Workspace, 'files' | 'fixtures' | 'revision' | 'snapshot' | 'fixtureSnapshot' | 'stage' | 'write' | 'remove' | 'writeFixture' | 'removeFixture' | 'replace'>;
 
-export function copyFiles(files: FileMap): FileMap {
+export function copyFiles(files: FileSnapshot): FileMap {
   return new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
 }
 export function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
   return a && b ? a.length === b.length && a.every((byte, index) => byte === b[index]) : a === b;
 }
-function publishFiles(files: FileMap, previous: FileMap): FileMap {
+function publishFiles(files: FileMap, previous: FileSnapshot): FileSnapshot {
   if (files.size === previous.size && [...files].every(([path, bytes]) => sameBytes(bytes, previous.get(path)))) return previous;
   return new Map([...files].map(([path, bytes]) => [path, sameBytes(bytes, previous.get(path)) ? previous.get(path)! : bytes.slice()]));
 }

@@ -1,7 +1,7 @@
 import { runAgent } from './agent';
 import { applyAgentChange } from './agentChanges';
 import { activeChat, type StudioSession } from './sessionStore';
-import type { Workspace, WorkspaceWriter } from './workspace';
+import { copyFiles, type Workspace, type WorkspaceWriter } from './workspace';
 
 export type TurnContext = {
   workspace: Workspace;
@@ -57,18 +57,19 @@ export function createAgentTurns(context: TurnContext, runner = runAgent) {
     },
     async accept() {
       const review = session.store.getState().pending;
-      if (!review) return;
-      await context.transact(review.turn.generation, async writer => {
+      if (!review || !session.beginAcceptance(review)) return;
+      try { await context.transact(review.turn.generation, async writer => {
         if (session.store.getState().pending !== review) throw new Error('This review is no longer pending');
-        if (writer.revision !== review.stage.baseRevision) throw new Error('The project changed during this turn. Discard the staged change and ask the agent to retry.');
-        await writer.replace(review.stage.files, review.stage.fixtures);
+        if (writer.revision !== review.baseRevision) throw new Error('The project changed during this turn. Discard the staged change and ask the agent to retry.');
+        await writer.replace(copyFiles(review.files), copyFiles(review.fixtures));
         session.clearReview(review);
       });
       context.flash('Agent changes accepted.');
+      } finally { session.endAcceptance(review); }
     },
     discard() {
       const review = session.store.getState().pending;
-      if (review) { session.clearReview(review); context.flash('Agent changes discarded.'); }
+      if (review && !session.store.getState().accepting) { session.clearReview(review); context.flash('Agent changes discarded.'); }
     },
   };
 }

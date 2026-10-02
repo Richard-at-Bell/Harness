@@ -1,14 +1,14 @@
 import { createStore } from 'zustand/vanilla';
-import { newStudioChat, titleForChat, type SavedSession, type Stage, type StudioChat, type ToolLine } from './workspace';
+import { copyFiles, newStudioChat, titleForChat, type FileSnapshot, type SavedSession, type Stage, type StudioChat, type ToolLine } from './workspace';
 
 export type Turn = { id: string; chatId: string; answerId: string; generation: number; modelId: string; review: boolean };
-export type PendingReview = { turn: Turn; stage: Stage; paths: string[] };
-export type SessionState = SavedSession & { reviewChanges: boolean; turn: Turn | null; pending: PendingReview | null; notice: string };
+export type PendingReview = { turn: Turn; baseRevision: number; files: FileSnapshot; fixtures: FileSnapshot; baseline: FileSnapshot; fixtureBaseline: FileSnapshot; paths: string[] };
+export type SessionState = SavedSession & { reviewChanges: boolean; turn: Turn | null; pending: PendingReview | null; accepting: boolean; notice: string };
 export const activeChat = (state: SessionState) => state.chats.find(chat => chat.id === state.activeChatId)!;
 export const sessionRecord = (state: SessionState): SavedSession => ({ version: 2, chats: state.chats, activeChatId: state.activeChatId });
 
 export function createSession(initial: SavedSession, reviewChanges: boolean) {
-  const state = createStore<SessionState>()(() => ({ ...initial, reviewChanges, turn: null, pending: null, notice: '' }));
+  const state = createStore<SessionState>()(() => ({ ...initial, reviewChanges, turn: null, pending: null, accepting: false, notice: '' }));
   const locked = () => Boolean(state.getState().turn || state.getState().pending);
   const updateChat = (id: string, update: (chat: StudioChat) => StudioChat) => state.setState(current => ({
     chats: current.chats.map(chat => chat.id === id ? { ...update(chat), updatedAt: new Date().toISOString() } : chat),
@@ -58,16 +58,21 @@ export function createSession(initial: SavedSession, reviewChanges: boolean) {
       if (!ownsTurn(turn)) return;
       const paths = turn.review ? stage.changes() : [];
       const current = state.getState();
-      state.setState({ turn: null, pending: paths.length ? { turn, stage, paths } : null,
+      state.setState({ turn: null, pending: paths.length ? { turn, baseRevision: stage.baseRevision, files: copyFiles(stage.files), fixtures: copyFiles(stage.fixtures), baseline: copyFiles(stage.baseline), fixtureBaseline: copyFiles(stage.fixtureBaseline), paths } : null,
         chats: messages ? current.chats.map(chat => chat.id === turn.chatId ? { ...chat, agentMessages: messages } : chat) : current.chats,
       });
     },
-    clearReview(review: PendingReview) { if (state.getState().pending === review) state.setState({ pending: null }); },
-    replaceSession(session: SavedSession) { state.setState({ ...session, turn: null, pending: null }); },
+    beginAcceptance(review: PendingReview) {
+      if (state.getState().pending !== review || state.getState().accepting) return false;
+      state.setState({ accepting: true }); return true;
+    },
+    endAcceptance(review: PendingReview) { if (state.getState().pending === review) state.setState({ accepting: false }); },
+    clearReview(review: PendingReview) { if (state.getState().pending === review) state.setState({ pending: null, accepting: false }); },
+    replaceSession(session: SavedSession) { state.setState({ ...session, turn: null, pending: null, accepting: false }); },
     invalidate() {
       const turn = state.getState().turn;
       if (turn) this.text(turn, 'Agent turn ended because the workspace was replaced or closed.');
-      state.setState({ turn: null, pending: null });
+      state.setState({ turn: null, pending: null, accepting: false });
     },
   };
 }
