@@ -59,7 +59,7 @@ export function createSession(initial: SavedSession, reviewChanges: boolean) {
       const paths = turn.review ? stage.changes() : [];
       const current = state.getState();
       state.setState({ turn: null, pending: paths.length ? { turn, baseRevision: stage.baseRevision, files: copyFiles(stage.files), fixtures: copyFiles(stage.fixtures), baseline: copyFiles(stage.baseline), fixtureBaseline: copyFiles(stage.fixtureBaseline), paths } : null,
-        chats: messages ? current.chats.map(chat => chat.id === turn.chatId ? { ...chat, agentMessages: messages } : chat) : current.chats,
+        chats: messages ? current.chats.map(chat => chat.id === turn.chatId ? { ...chat, agentMessages: structuredClone(messages) } : chat) : current.chats,
       });
     },
     beginAcceptance(review: PendingReview) {

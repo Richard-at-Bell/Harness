@@ -26,10 +26,10 @@ export function persistSession(session: StudioSession, storage: Persistence = { 
     if (unsubscribe) return;
     last = session.store.getState();
     unsubscribe = session.store.subscribe(next => {
-    const changed = next.chats !== last.chats || next.activeChatId !== last.activeChatId || next.reviewChanges !== last.reviewChanges;
-    last = next;
-    if (!changed) return;
-    dirty = true; clearTimeout(timer); timer = setTimeout(flush, delay);
+      const changed = next.chats !== last.chats || next.activeChatId !== last.activeChatId || next.reviewChanges !== last.reviewChanges;
+      last = next;
+      if (!changed) return;
+      dirty = true; clearTimeout(timer); timer = setTimeout(flush, delay);
     });
   };
   start();

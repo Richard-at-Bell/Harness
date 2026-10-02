@@ -9,13 +9,13 @@ import { modelName } from './models';
 import { activeChat } from './sessionStore';
 import { useGeneration, useSession, useStudio } from './studioContext';
 
-function SessionSwitcher() {
+const SessionSwitcher = memo(function SessionSwitcher() {
   const studio = useStudio();
   const chats = useSession(state => state.chats), activeId = useSession(state => state.activeChatId);
   const locked = useSession(state => Boolean(state.turn || state.pending));
   return <ChatSwitcher chats={chats} activeId={activeId} locked={locked} onSelect={studio.session.switchChat} onNew={studio.session.newChat} onRename={studio.session.renameChat} />;
-}
-function Transcript({ suggest }: { suggest: (prompt: string) => void }) {
+});
+const Transcript = memo(function Transcript({ suggest }: { suggest: (prompt: string) => void }) {
   const chat = useSession(state => activeChat(state).chat);
   const busy = useSession(state => Boolean(state.turn));
   const reviewChanges = useSession(state => state.reviewChanges);
@@ -26,8 +26,8 @@ function Transcript({ suggest }: { suggest: (prompt: string) => void }) {
     {chat.map(line => <div key={line.id} className={`chat-line ${line.role}`}><div className="chat-avatar">{line.role === 'user' ? 'You' : <Sparkles size={14} />}</div><div className="chat-body"><span className="chat-role">{line.role === 'user' ? 'You' : line.model ? modelName(line.model) : 'Agent'}</span><div className="chat-text">{line.text || (busy ? <span className="typing">Thinking<span>…</span></span> : '')}</div></div></div>)}
     <SessionActivity /><ReviewPanel /><div ref={bottom} />
   </>;
-}
-function SessionActivity() { const tools = useSession(state => activeChat(state).tools); return <ActivityPanel tools={tools} />; }
+});
+const SessionActivity = memo(function SessionActivity() { const tools = useSession(state => activeChat(state).tools); return <ActivityPanel tools={tools} />; });
 
 export const AgentPane = memo(function AgentPane({ open, onClose, apiKey, onNeedsKey }: { open: boolean; onClose: () => void; apiKey: string; onNeedsKey: () => void }) {
   const studio = useStudio();

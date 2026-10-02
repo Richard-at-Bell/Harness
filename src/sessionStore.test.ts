@@ -19,7 +19,10 @@ describe('chat identity and session lifecycle', () => {
     expect(after.chats[1]).toBe(before.chats[1]);
     expect(after.chats[0].tools).toBe(before.chats[0].tools);
     expect(after.chats[0].chat.find(line => line.id === turn.answerId)?.text).toBe('Hello');
-    session.finish(turn, new Stage(new Map(), 0));
+    const returnedHistory = [{ nested: { text: 'owned history' } }];
+    session.finish(turn, new Stage(new Map(), 0), returnedHistory);
+    returnedHistory[0].nested.text = 'mutated by runner';
+    expect(session.store.getState().chats[0].agentMessages).toEqual([{ nested: { text: 'owned history' } }]);
     session.switchChat(b.id);
     session.text(turn, 'Late completion');
     expect(session.store.getState().chats.find(chat => chat.id === a.id)?.chat.at(-1)?.text).toBe('Hello');

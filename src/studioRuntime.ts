@@ -119,22 +119,26 @@ export class StudioRuntime {
   async importProject(file: File) {
     const captured = this.generation;
     const imported = await importZip(file);
+    let committedGeneration = captured;
     await this.transact(captured, async writer => {
-      this.advanceGeneration();
+      this.advanceGeneration(); committedGeneration = this.generation;
       await writer.replace(imported.files, imported.fixtures);
       this.session.replaceSession({ version: 2, chats: imported.chats, activeChatId: imported.activeChatId });
     });
-    this.flash('Project imported.'); return fixtureIds(imported.fixtures)[0] || 'todos';
+    if (committedGeneration === this.generation) this.flash('Project imported.');
+    return { tableId: fixtureIds(imported.fixtures)[0] || 'todos', generation: committedGeneration };
   }
   async resetProject() {
     const captured = this.generation;
+    let committedGeneration = captured;
     const chat = newStudioChat(this.session.store.getState().chats.find(chat => chat.id === this.session.store.getState().activeChatId)!.modelId);
     await this.transact(captured, async writer => {
-      this.advanceGeneration();
+      this.advanceGeneration(); committedGeneration = this.generation;
       await writer.replace(new Map(Object.entries(templateFiles).map(([p, v]) => [p, toBytes(v)])), new Map(Object.entries(templateFixtures).map(([p, v]) => [p, toBytes(v)])));
       this.session.replaceSession({ version: 2, chats: [chat], activeChatId: chat.id });
     });
-    this.flash('Fresh to-do project created.');
+    if (committedGeneration === this.generation) this.flash('Fresh to-do project created.');
+    return committedGeneration;
   }
   async exportProject() {
     const snapshot = await this.transact(this.generation, async writer => ({ files: copyFiles(writer.files), fixtures: copyFiles(writer.fixtures), session: structuredClone(sessionRecord(this.session.store.getState())) }));

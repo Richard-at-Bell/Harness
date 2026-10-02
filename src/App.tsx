@@ -13,13 +13,17 @@ function Notice() {
   return notice ? <div className="toast"><span>{notice}</span><button onClick={() => studio.session.notice('')}><X size={14} /></button></div> : null;
 }
 
+function Breadcrumb({ tab, selected, tableId }: { tab: 'files' | 'data'; selected: string; tableId: string }) {
+  const bytes = useWorkspace(state => tab === 'files' ? state.files.get(selected) : undefined);
+  return <div className="file-breadcrumb"><span className="crumb-dim">{tab === 'data' ? 'studio' : 'project'}</span><span>/</span><strong>{tab === 'data' ? `fixtures / ${tableId}` : selected}</strong>{bytes && <span className="file-size">{(bytes.byteLength / 1024).toFixed(1)} KB</span>}</div>;
+}
+
 export function App() {
   const studio = useStudio();
   const generation = useGeneration();
   const importRef = useRef<HTMLInputElement>(null);
   const tableImportRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState('app.js');
-  const selectedBytes = useWorkspace(state => state.files.get(selected));
   const [tab, setTab] = useState<'files' | 'data'>('files');
   const [view, setView] = useState<'split' | 'code' | 'preview'>(() => window.innerWidth <= 1200 ? 'preview' : 'split');
   const [previewVersion, setPreviewVersion] = useState(0);
@@ -40,7 +44,7 @@ export function App() {
   const openTableImport = useCallback(() => tableImportRef.current?.click(), []);
 
   async function importProject(file: File) {
-    try { const id = await studio.importProject(file); setSelected('index.html'); setSelectedTableId(id); setTab('files'); } catch (error) { studio.report(error); }
+    try { const result = await studio.importProject(file); if (studio.generation !== result.generation) return; setSelected('index.html'); setSelectedTableId(result.tableId); setTab('files'); } catch (error) { studio.report(error); }
   }
   async function exportProject() {
     if (exportLock.current) return;
@@ -51,18 +55,20 @@ export function App() {
   }
   async function resetProject() {
     if (!window.confirm('Replace this project, its studio fixtures, and chats with a fresh to-do template? Export first if you want to keep your work.')) return;
-    try { await studio.resetProject(); setSelected('app.js'); setSelectedTableId('todos'); } catch (error) { studio.report(error); }
+    try { const committed = await studio.resetProject(); if (studio.generation !== committed) return; setSelected('app.js'); setSelectedTableId('todos'); } catch (error) { studio.report(error); }
   }
   async function createNewItem() {
     const name = newItemName.trim();
+    const captured = studio.generation;
     try {
-      if (newItem === 'file') { await studio.createFile(name); setSelected(name); setTab('files'); setView('code'); }
-      else if (newItem === 'table') { const id = name.toLowerCase(); await studio.createTable(id); setSelectedTableId(id); setTab('data'); }
+      if (newItem === 'file') { await studio.createFile(name); if (studio.generation !== captured) return; setSelected(name); setTab('files'); setView('code'); }
+      else if (newItem === 'table') { const id = name.toLowerCase(); await studio.createTable(id); if (studio.generation !== captured) return; setSelectedTableId(id); setTab('data'); }
       setNewItem(null); setNewItemName('');
     } catch (error) { studio.report(error); }
   }
   async function importTable(file: File) {
-    try { const id = await studio.importTable(file); setSelectedTableId(id); setTab('data'); } catch (error) { studio.report(error); }
+    const captured = studio.generation;
+    try { const id = await studio.importTable(file); if (studio.generation !== captured) return; setSelectedTableId(id); setTab('data'); } catch (error) { studio.report(error); }
   }
 
   return <div className="studio">
@@ -89,7 +95,7 @@ export function App() {
 
       <main className="main-pane">
         <div className="main-toolbar">
-          <div className="file-breadcrumb"><span className="crumb-dim">{tab === 'data' ? 'studio' : 'project'}</span><span>/</span><strong>{tab === 'data' ? `fixtures / ${selectedTableId}` : selected}</strong>{tab === 'files' && selectedBytes && <span className="file-size">{(selectedBytes.byteLength / 1024).toFixed(1)} KB</span>}</div>
+          <Breadcrumb tab={tab} selected={selected} tableId={selectedTableId} />
           <div className="view-switch">{tab === 'files' && <><button className={view === 'code' ? 'selected' : ''} onClick={() => setView('code')} title="Code"><Code2 size={15} /></button><button className={view === 'split' ? 'selected' : ''} onClick={() => setView('split')} title="Split"><LayoutPanelLeft size={15} /></button><button className={view === 'preview' ? 'selected' : ''} onClick={() => setView('preview')} title="Preview"><Play size={15} /></button></>}<button onClick={() => setPreviewVersion(v => v + 1)} title="Reload preview"><RefreshCw size={15} /></button></div>
         </div>
 

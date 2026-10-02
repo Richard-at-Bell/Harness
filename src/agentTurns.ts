@@ -58,13 +58,14 @@ export function createAgentTurns(context: TurnContext, runner = runAgent) {
     async accept() {
       const review = session.store.getState().pending;
       if (!review || !session.beginAcceptance(review)) return;
-      try { await context.transact(review.turn.generation, async writer => {
-        if (session.store.getState().pending !== review) throw new Error('This review is no longer pending');
-        if (writer.revision !== review.baseRevision) throw new Error('The project changed during this turn. Discard the staged change and ask the agent to retry.');
-        await writer.replace(copyFiles(review.files), copyFiles(review.fixtures));
-        session.clearReview(review);
-      });
-      context.flash('Agent changes accepted.');
+      try {
+        await context.transact(review.turn.generation, async writer => {
+          if (session.store.getState().pending !== review) throw new Error('This review is no longer pending');
+          if (writer.revision !== review.baseRevision) throw new Error('The project changed during this turn. Discard the staged change and ask the agent to retry.');
+          await writer.replace(copyFiles(review.files), copyFiles(review.fixtures));
+          session.clearReview(review);
+        });
+        context.flash('Agent changes accepted.');
       } finally { session.endAcceptance(review); }
     },
     discard() {

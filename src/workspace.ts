@@ -101,8 +101,8 @@ async function writeFile(root: FileSystemDirectoryHandle, path: string, bytes: U
   for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
   const handle = await dir.getFileHandle(parts.at(-1)!, { create: true });
   const writer = await handle.createWritable();
-  await writer.write(bytes as BlobPart);
-  await writer.close();
+  try { await writer.write(bytes as BlobPart); await writer.close(); }
+  catch (error) { await writer.abort().catch(() => {}); throw error; }
 }
 
 async function removeFile(root: FileSystemDirectoryHandle, path: string): Promise<void> {

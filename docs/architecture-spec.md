@@ -21,6 +21,8 @@ User key ── Pi model provider request
 
 The workspace service writes project files and Studio fixtures to separate OPFS roots. Monaco, agent tools, fixture operations, preview data writes, and export all use it. Review is on by default: an agent turn works in a staged branch based on the accepted revision. With review off, each successful mutation advances the accepted workspace immediately. Multiple chats share these files but keep separate conversation state.
 
+The implemented reactive ownership and lifecycle boundaries are documented in the [state ownership map](state-ownership.md).
+
 ## Workspace contract
 
 Project paths are project-relative POSIX paths. `fixtures/` is reserved for Studio data and unavailable to project file tools. Reject absolute paths, `..` traversal, duplicate normalized paths, and writes to studio-owned records. Binary files are supported for images and XLSX; Monaco opens only supported text files.
@@ -54,7 +56,7 @@ OPFS stores project bytes and Studio fixture bytes in separate roots. IndexedDB 
 
 Use `@earendil-works/pi-agent-core` for the browser tool loop and `@earendil-works/pi-ai` for supported provider calls. The full `pi-coding-agent` SDK embeds in Node/Bun, so its default shell and file tools are not the browser implementation. Define a small, versioned set of custom tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `list_tables`, `read_table`, and `write_table`. Project file tools do not expose fixture bytes. The agent cannot invoke a shell in the first release.
 
-Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. With review on, writes stay staged; acceptance applies the turn only if its starting revision remains current. With review off, tools refresh their view from the workspace before execution, then await persistence of the affected path before reporting success. Fixture commits share the preview mutation queue, and each commit compares the current bytes with the tool's starting bytes to detect a concurrent edit. Other files are preserved. Successful automatic edits remain applied if a later part of the turn fails.
+Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. With review on, writes stay staged; acceptance applies the turn only if its starting revision remains current. With review off, tools refresh their view from the workspace before execution, then await persistence of the affected path before reporting success. Accepted workspace operations share one queue protecting complete read-modify-write operations, and each commit compares the current bytes with the tool's starting bytes to detect a concurrent edit. Other files are preserved. Successful automatic edits remain applied if a later part of the turn fails.
 
 The review preference lives in IndexedDB separately from session records. It defaults to on, survives reload, and cannot change during a running turn or pending review. The agent's system instructions describe the selected mode. Both modes retain chat and tool activity; automatic mode does not create a pending diff or block the next prompt.
 

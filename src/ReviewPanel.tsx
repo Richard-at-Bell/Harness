@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowRight, Check } from 'lucide-react';
 import { DiffReview } from './DiffReview';
 import { iconFor, language } from './filePresentation';
@@ -6,7 +7,7 @@ import { readTable } from './fixtures';
 import { useSession, useStudio } from './studioContext';
 import { toText, validFixturePath } from './workspace';
 
-export function ReviewPanel() {
+export const ReviewPanel = memo(function ReviewPanel() {
   const studio = useStudio(), review = useSession(state => state.pending);
   const accepting = useSession(state => state.accepting);
   const [selection, setSelection] = useState<{ review: typeof review; path: string; open: boolean }>({ review: null, path: '', open: false });
@@ -31,6 +32,6 @@ export function ReviewPanel() {
   const select = (path: string) => setSelection({ review, path, open: true });
   const accept = () => { studio.turns.accept().catch(studio.report); };
   return <><div className="pending-card"><div className="pending-top"><span><span className="pending-dot" /> REVIEW CHANGES</span><strong>{review.paths.length} {review.paths.length === 1 ? 'file' : 'files'}</strong></div><div className="pending-files">{review.paths.map(path => <button key={path} onClick={() => select(path)}>{iconFor(path)} {path} <ArrowRight size={13} /></button>)}</div><div className="pending-actions"><button disabled={accepting} onClick={() => studio.turns.discard()}>Discard</button><button className="accept" disabled={accepting} onClick={accept}><Check size={14} /> Accept changes</button></div></div>
-    {open && texts?.review === review && texts.path === path && <DiffReview key={path} path={path} paths={review.paths} original={texts.original} modified={texts.modified} locked={accepting} language={path.endsWith('.xlsx') ? 'json' : language(path)} onPathChange={select} onClose={() => setSelection({ review, path, open: false })} onDiscard={() => studio.turns.discard()} onAccept={accept} />}
+    {open && texts?.review === review && texts.path === path && createPortal(<DiffReview key={path} path={path} paths={review.paths} original={texts.original} modified={texts.modified} locked={accepting} language={path.endsWith('.xlsx') ? 'json' : language(path)} onPathChange={select} onClose={() => setSelection({ review, path, open: false })} onDiscard={() => studio.turns.discard()} onAccept={accept} />, document.body)}
   </>;
-}
+});

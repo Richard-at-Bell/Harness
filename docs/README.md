@@ -14,6 +14,8 @@ Read in this order:
 6. [Agent model choices](model-selection.md) — current picker models and the comparison seam.
 7. [Browser agent workflow review](browser-workflow-review.md) — requested capabilities, observed UI results, and harness fixes.
 
+8. [State ownership and subscriptions](state-ownership.md) — implemented Zustand boundaries, operation invariants, lifecycles and verification.
+
 ## Review focus
 
 The highest-impact choices are [D-004](decisions.md#d-004-preview-runtime), [D-006](decisions.md#d-006-what-table-writes-mean-after-export), and [D-007](decisions.md#d-007-fixture-formats). They determine how live preview and table writes work, and what a downloaded project can do independently of the studio.

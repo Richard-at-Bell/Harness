@@ -124,7 +124,7 @@ export async function runAgent(prompt: string, key: string, modelId: string, sta
     ? { ...listedModel, api: 'openai-completions' as const, baseUrl: 'https://openrouter.ai/api/v1', compat: { thinkingFormat: 'openrouter' as const } }
     : listedModel;
   const agent = new Agent({
-    initialState: { systemPrompt: `${systemPrompt}\n${callbacks.onChange ? 'Review is off. Each successful edit is applied immediately to the project and live preview.' : 'Review is on. Your edits are staged until the user accepts the turn.'}`, model, tools: createTools(stage, callbacks), messages: prior.length ? prior as AgentMessage[] : undefined },
+    initialState: { systemPrompt: `${systemPrompt}\n${callbacks.onChange ? 'Review is off. Each successful edit is applied immediately to the project and live preview.' : 'Review is on. Your edits are staged until the user accepts the turn.'}`, model, tools: createTools(stage, callbacks), messages: prior.length ? structuredClone(prior) as AgentMessage[] : undefined },
     streamFn: (selected, context, options) => models.streamSimple(selected, context, { ...options, apiKey: key }),
     toolExecution: 'sequential',
   });
