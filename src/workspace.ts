@@ -2,6 +2,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import { createStore } from 'zustand/vanilla';
 import { templateFiles, templateFixtures } from './template';
 import { DEFAULT_MODEL } from './models';
+import { changesBetween, IndexedWorkspaceStorage, RevisionConflict, type CommittedWorkspace, type Replacement, type WorkspaceStorage } from './workspaceStorage';
 
 export type FileMap = Map<string, Uint8Array>;
 // Published maps and their byte values are read-only to consumers. Working
@@ -95,29 +96,15 @@ async function readAll(dir: FileSystemDirectoryHandle, prefix = ''): Promise<Fil
   return out;
 }
 
-async function writeFile(root: FileSystemDirectoryHandle, path: string, bytes: Uint8Array): Promise<void> {
-  const parts = path.split('/');
-  let dir = root;
-  for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
-  const handle = await dir.getFileHandle(parts.at(-1)!, { create: true });
-  const writer = await handle.createWritable();
-  try { await writer.write(bytes as BlobPart); await writer.close(); }
-  catch (error) { await writer.abort().catch(() => {}); throw error; }
-}
-
-async function removeFile(root: FileSystemDirectoryHandle, path: string): Promise<void> {
-  const parts = path.split('/');
-  let dir = root;
-  for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part);
-  await dir.removeEntry(parts.at(-1)!);
-}
-
-export type WorkspaceSnapshot = { readonly files: FileSnapshot; readonly fixtures: FileSnapshot; readonly revision: number };
-export type WorkspaceStorage = {
-  write: (fixture: boolean, path: string, bytes: Uint8Array) => Promise<void>;
-  remove: (fixture: boolean, path: string) => Promise<void>;
+export type WorkspaceSnapshot = { readonly files: FileSnapshot; readonly fixtures: FileSnapshot; readonly revision: number; readonly identity: string };
+export type WorkspaceWriter = {
+  readonly files: FileMap; readonly fixtures: FileMap; readonly revision: number;
+  snapshot(): FileMap; fixtureSnapshot(): FileMap; stage(): Stage;
+  write(path: string, bytes: Uint8Array): Promise<void>; remove(path: string): Promise<void>;
+  writeFixture(path: string, bytes: Uint8Array): Promise<void>; removeFixture(path: string): Promise<void>;
+  replace(files: FileMap, fixtures?: FileMap): Promise<void>;
 };
-export type WorkspaceWriter = Pick<Workspace, 'files' | 'fixtures' | 'revision' | 'snapshot' | 'fixtureSnapshot' | 'stage' | 'write' | 'remove' | 'writeFixture' | 'removeFixture' | 'replace'>;
+export type Activation = { replacement: Replacement; activate: () => void };
 
 export function copyFiles(files: FileSnapshot): FileMap {
   return new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
@@ -130,118 +117,101 @@ function publishFiles(files: FileMap, previous: FileSnapshot): FileSnapshot {
   return new Map([...files].map(([path, bytes]) => [path, sameBytes(bytes, previous.get(path)) ? previous.get(path)! : bytes.slice()]));
 }
 
-// Storage owns accepted bytes. The store is a read-only published projection;
-// callers get detached working snapshots, never the storage-owned byte arrays.
+// Operations stage detached maps. Only a completed storage transaction changes
+// accepted bytes; the local queue and the durable revision CAS serve different scopes.
 export class Workspace {
   private acceptedFiles: FileMap;
   private acceptedFixtures: FileMap;
-  private currentRevision = 0;
+  private currentRevision: number;
+  private currentIdentity: string;
   private operations: Promise<unknown> = Promise.resolve();
   private readonly publication;
   readonly store;
 
-  constructor(private readonly storage: WorkspaceStorage, files: FileMap, fixtures: FileMap = new Map()) {
-    this.acceptedFiles = copyFiles(files);
-    this.acceptedFixtures = copyFiles(fixtures);
-    this.publication = createStore<WorkspaceSnapshot>()(() => ({ files: copyFiles(files), fixtures: copyFiles(fixtures), revision: 0 }));
+  constructor(private readonly storage: WorkspaceStorage, files: FileMap, fixtures: FileMap = new Map(), readonly opened?: CommittedWorkspace) {
+    this.acceptedFiles = copyFiles(files); this.acceptedFixtures = copyFiles(fixtures);
+    this.currentRevision = opened?.revision ?? 0; this.currentIdentity = opened?.identity ?? crypto.randomUUID();
+    this.publication = createStore<WorkspaceSnapshot>()(() => ({ files: copyFiles(files), fixtures: copyFiles(fixtures), revision: this.revision, identity: this.identity }));
     const { getState, getInitialState, subscribe } = this.publication;
     this.store = { getState, getInitialState, subscribe };
   }
-
   static async open(): Promise<Workspace> {
-    const roots = await storageRoots();
-    const files = await readAll(roots.project);
-    const fixtures = await readAll(roots.fixtures);
-    for (const [path, bytes] of files) if (validFixturePath(path)) {
-      if (!fixtures.has(path)) { await writeFile(roots.fixtures, path, bytes); fixtures.set(path, bytes); }
-      await removeFile(roots.project, path);
-      files.delete(path);
+    const storage = await IndexedWorkspaceStorage.connect();
+    let committed = await storage.load();
+    if (!committed) {
+      // Read legacy data without mutating it. One CAS activation completes the
+      // migration; a crash or quota failure leaves legacy data fully recoverable.
+      const roots = await storageRoots();
+      const files = await readAll(roots.project), fixtures = await readAll(roots.fixtures);
+      for (const [path, bytes] of files) if (validFixturePath(path)) {
+        if (!fixtures.has(path)) fixtures.set(path, bytes);
+        files.delete(path);
+      }
+      if (!files.size) {
+        for (const [path, text] of Object.entries(templateFiles)) files.set(path, toBytes(text));
+        if (!fixtures.size) for (const [path, text] of Object.entries(templateFixtures)) fixtures.set(path, toBytes(text));
+      }
+      const [session, review] = await Promise.all([loadSession(), loadReviewChanges()]);
+      try { await storage.initialize({ files, fixtures, session, review, identity: crypto.randomUUID(), selection: { file: files.has('app.js') ? 'app.js' : [...files.keys()][0], tableId: 'todos', tab: 'files' } }); }
+      catch (error) { if (!(error instanceof RevisionConflict)) throw error; }
+      committed = await storage.load();
     }
-    const workspace = new Workspace({
-      write: (fixture, path, bytes) => writeFile(fixture ? roots.fixtures : roots.project, path, bytes),
-      remove: (fixture, path) => removeFile(fixture ? roots.fixtures : roots.project, path),
-    }, files, fixtures);
-    if (!files.size) await workspace.replace(
-      new Map(Object.entries(templateFiles).map(([p, v]) => [p, toBytes(v)])),
-      fixtures.size ? fixtures : new Map(Object.entries(templateFixtures).map(([p, v]) => [p, toBytes(v)])),
-    );
-    return workspace;
+    if (!committed) throw new Error('Workspace activation failed');
+    return new Workspace(storage, committed.files, committed.fixtures, committed);
   }
-
   get files(): FileMap { return this.snapshot(); }
   get fixtures(): FileMap { return this.fixtureSnapshot(); }
   get revision(): number { return this.currentRevision; }
+  get identity(): string { return this.currentIdentity; }
   read(path: string): Uint8Array | undefined { return this.acceptedFiles.get(path)?.slice(); }
   text(path: string): string { return toText(this.acceptedFiles.get(path) || new Uint8Array()); }
   snapshot(): FileMap { return copyFiles(this.acceptedFiles); }
   fixtureSnapshot(): FileMap { return copyFiles(this.acceptedFixtures); }
   stage(): Stage { return new Stage(this.snapshot(), this.revision, this.fixtureSnapshot()); }
+  saveSession(identity: string, session: SavedSession) { return this.storage.saveSession?.(identity, session) ?? Promise.resolve(); }
+  saveReview(identity: string, review: boolean) { return this.storage.saveReview?.(identity, review) ?? Promise.resolve(); }
 
-  // Protect the entire read/parse/modify/serialize/write operation, including
-  // revision checks. Inside the callback use this writer, not queued methods.
-  transaction<T>(operation: (writer: WorkspaceWriter) => Promise<T>): Promise<T> {
+  transaction<T>(operation: (writer: WorkspaceWriter) => Promise<T>, activation?: Activation): Promise<T> {
     const run = async () => {
-      const workspace = this;
-      const writer: WorkspaceWriter = {
-        get files() { return workspace.snapshot(); },
-        get fixtures() { return workspace.fixtureSnapshot(); },
-        get revision() { return workspace.revision; },
-        snapshot: () => this.snapshot(), fixtureSnapshot: () => this.fixtureSnapshot(), stage: () => this.stage(),
-        write: (path, bytes) => this.commitWrite(false, path, bytes),
-        remove: path => this.commitRemove(false, path),
-        writeFixture: (path, bytes) => this.commitWrite(true, path, bytes),
-        removeFixture: path => this.commitRemove(true, path),
-        replace: (files, fixtures) => this.commitReplace(files, fixtures ?? this.acceptedFixtures),
+      let files = this.snapshot(), fixtures = this.fixtureSnapshot();
+      const change = async (fixture: boolean, path: string, bytes?: Uint8Array) => {
+        if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error('Invalid path');
+        const target = fixture ? fixtures : files;
+        if (bytes) target.set(path, bytes.slice()); else target.delete(path);
       };
-      try { return await operation(writer); }
-      finally {
+      const writer: WorkspaceWriter = {
+        get files() { return copyFiles(files); }, get fixtures() { return copyFiles(fixtures); }, revision: this.revision,
+        snapshot: () => copyFiles(files), fixtureSnapshot: () => copyFiles(fixtures), stage: () => new Stage(files, this.revision, fixtures),
+        write: (path, bytes) => change(false, path, bytes), remove: path => change(false, path),
+        writeFixture: (path, bytes) => change(true, path, bytes), removeFixture: path => change(true, path),
+        replace: async (nextFiles, nextFixtures = fixtures) => {
+          for (const path of nextFiles.keys()) if (!validProjectPath(path)) throw new Error(`Invalid project path: ${path}`);
+          for (const path of nextFixtures.keys()) if (!validFixturePath(path)) throw new Error(`Invalid fixture path: ${path}`);
+          files = copyFiles(nextFiles); fixtures = copyFiles(nextFixtures);
+        },
+      };
+      const result = await operation(writer);
+      const changes = changesBetween(this.acceptedFiles, this.acceptedFixtures, files, fixtures);
+      if (changes.length || activation) {
+        const committed = await this.storage.commit({ expectedRevision: this.revision, changes, replacement: activation?.replacement });
+        this.acceptedFiles = files; this.acceptedFixtures = fixtures;
+        this.currentRevision = committed.revision;
+        if (activation) this.currentIdentity = committed.identity;
         const previous = this.publication.getState();
-        if (previous.revision !== this.revision) this.publication.setState({
-          files: publishFiles(this.acceptedFiles, previous.files),
-          fixtures: publishFiles(this.acceptedFixtures, previous.fixtures), revision: this.revision,
-        });
+        // Accepted service data is already new when activation observers run.
+        // Runtime keeps operation gating in place until all stores are reconciled.
+        activation?.activate();
+        this.publication.setState({ files: publishFiles(files, previous.files), fixtures: publishFiles(fixtures, previous.fixtures), revision: this.revision, identity: this.identity });
       }
+      return result;
     };
-    const result = this.operations.then(run, run);
-    this.operations = result.catch(() => {});
-    return result;
+    const result = this.operations.then(run, run); this.operations = result.catch(() => {}); return result;
   }
-
-  private async commitWrite(fixture: boolean, path: string, bytes: Uint8Array): Promise<void> {
-    if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error(fixture ? 'Invalid fixture path' : 'Invalid project path');
-    const owned = bytes.slice();
-    const files = fixture ? this.acceptedFixtures : this.acceptedFiles;
-    if (sameBytes(files.get(path), owned)) return;
-    await this.storage.write(fixture, path, owned.slice());
-    files.set(path, owned);
-    this.currentRevision++;
-  }
-  private async commitRemove(fixture: boolean, path: string): Promise<void> {
-    if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error('Invalid path');
-    const files = fixture ? this.acceptedFixtures : this.acceptedFiles;
-    if (!files.has(path)) return;
-    await this.storage.remove(fixture, path);
-    files.delete(path);
-    this.currentRevision++;
-  }
-  private async commitReplace(files: FileMap, fixtures: FileMap): Promise<void> {
-    for (const path of files.keys()) if (!validProjectPath(path)) throw new Error(`Invalid project path: ${path}`);
-    for (const path of fixtures.keys()) if (!validFixturePath(path)) throw new Error(`Invalid fixture path: ${path}`);
-    // Successful individual writes remain authoritative if a later disk write
-    // fails. Finally publishes that partial success and the queue stays usable.
-    for (const [path, bytes] of files) await this.commitWrite(false, path, bytes);
-    for (const [path, bytes] of fixtures) await this.commitWrite(true, path, bytes);
-    for (const path of this.acceptedFiles.keys()) if (!files.has(path)) await this.commitRemove(false, path);
-    for (const path of this.acceptedFixtures.keys()) if (!fixtures.has(path)) await this.commitRemove(true, path);
-  }
-  write(path: string, bytes: Uint8Array): Promise<void> { const owned = bytes.slice(); return this.transaction(writer => writer.write(path, owned)); }
-  remove(path: string): Promise<void> { return this.transaction(writer => writer.remove(path)); }
-  writeFixture(path: string, bytes: Uint8Array): Promise<void> { const owned = bytes.slice(); return this.transaction(writer => writer.writeFixture(path, owned)); }
-  removeFixture(path: string): Promise<void> { return this.transaction(writer => writer.removeFixture(path)); }
-  replace(files: FileMap, fixtures?: FileMap): Promise<void> {
-    const ownedFiles = copyFiles(files), ownedFixtures = fixtures && copyFiles(fixtures);
-    return this.transaction(writer => writer.replace(ownedFiles, ownedFixtures));
-  }
+  write(path: string, bytes: Uint8Array) { const owned = bytes.slice(); return this.transaction(writer => writer.write(path, owned)); }
+  remove(path: string) { return this.transaction(writer => writer.remove(path)); }
+  writeFixture(path: string, bytes: Uint8Array) { const owned = bytes.slice(); return this.transaction(writer => writer.writeFixture(path, owned)); }
+  removeFixture(path: string) { return this.transaction(writer => writer.removeFixture(path)); }
+  replace(files: FileMap, fixtures?: FileMap) { const owned = copyFiles(files), ownedFixtures = fixtures && copyFiles(fixtures); return this.transaction(writer => writer.replace(owned, ownedFixtures)); }
 }
 
 export class Stage {

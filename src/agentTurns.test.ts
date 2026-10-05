@@ -1,3 +1,4 @@
+import { memoryStorage } from './workspaceStorage';
 import { describe, expect, it } from 'vitest';
 import type { runAgent } from './agent';
 import { createAgentTurns } from './agentTurns';
@@ -5,7 +6,7 @@ import { createSession } from './sessionStore';
 import { newStudioChat, toBytes, Workspace } from './workspace';
 
 function setup(runner: typeof runAgent, write: () => Promise<void> = async () => {}) {
-  const workspace = new Workspace({ write, remove: async () => {} }, new Map([['index.html', toBytes('Old')]]));
+  const workspace = new Workspace(memoryStorage({ write, remove: async () => {} }), new Map([['index.html', toBytes('Old')]]));
   const chat = newStudioChat();
   const session = createSession({ version: 2, chats: [chat], activeChatId: chat.id }, true);
   let generation = 0;

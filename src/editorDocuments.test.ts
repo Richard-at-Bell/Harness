@@ -1,3 +1,4 @@
+import { memoryStorage } from './workspaceStorage';
 import { describe, expect, it, vi } from 'vitest';
 import { EditorDocuments } from './editorDocuments';
 import { Workspace, toBytes } from './workspace';
@@ -13,10 +14,10 @@ describe('editor buffer acknowledgement', () => {
   it('keeps the latest failed buffer after an earlier save succeeds, then retries it', async () => {
     const gate = deferred();
     let attempts = 0;
-    const workspace = new Workspace({ write: async () => {
+    const workspace = new Workspace(memoryStorage({ write: async () => {
       if (++attempts === 1) await gate.promise;
       if (attempts === 2) throw new Error('Storage full');
-    }, remove: async () => {} }, new Map([['app.js', toBytes('original')]]));
+    }, remove: async () => {} }), new Map([['app.js', toBytes('original')]]));
     const report = vi.fn();
     const documents = new EditorDocuments((path, text) => workspace.write(path, toBytes(text)), report);
 

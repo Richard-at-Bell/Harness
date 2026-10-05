@@ -1,3 +1,4 @@
+import { memoryStorage } from './workspaceStorage';
 import { describe, expect, it } from 'vitest';
 import { StudioRuntime } from './studioRuntime';
 import { readTable } from './fixtures';
@@ -6,7 +7,7 @@ import { templateFiles } from './template';
 import { newStudioChat, toBytes, Workspace } from './workspace';
 
 function setup() {
-  const workspace = new Workspace({ write: async () => {}, remove: async () => {} }, new Map([['index.html', toBytes('Project')]]), new Map([['fixtures/todos.csv', toBytes('id,title\n1,Original\n')]]));
+  const workspace = new Workspace(memoryStorage({ write: async () => {}, remove: async () => {} }), new Map([['index.html', toBytes('Project')]]), new Map([['fixtures/todos.csv', toBytes('id,title\n1,Original\n')]]));
   const chat = newStudioChat();
   return new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
 }

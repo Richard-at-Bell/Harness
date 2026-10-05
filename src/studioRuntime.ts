@@ -5,7 +5,7 @@ import { persistSession } from './sessionPersistence';
 import { exportZip, importZip } from './export';
 import { fixtureIds, readTable, tableBytes, type Row, type Table } from './fixtures';
 import { templateFiles, templateFixtures } from './template';
-import { copyFiles, loadReviewChanges, loadSession, newStudioChat, sameBytes, toBytes, validProjectPath, Workspace, type SavedSession, type WorkspaceWriter } from './workspace';
+import { copyFiles, newStudioChat, sameBytes, toBytes, validProjectPath, Workspace, type SavedSession, type WorkspaceWriter } from './workspace';
 
 export class StudioRuntime {
   readonly session;
@@ -23,13 +23,19 @@ export class StudioRuntime {
     this.turns = createAgentTurns({ workspace, session: this.session, generation: () => this.generation, transact: this.transact, flash: this.flash });
   }
   static async open() {
-    const [workspace, session, review] = await Promise.all([Workspace.open(), loadSession(), loadReviewChanges()]);
-    return new StudioRuntime(workspace, session, review);
+    const workspace = await Workspace.open();
+    const studio = new StudioRuntime(workspace, workspace.opened!.session, workspace.opened!.review);
+    if (workspace.opened!.recovery) studio.flash(workspace.opened!.recovery);
+    return studio;
   }
   get generation() { return this.lifecycle.getState().generation; }
   start() {
     this.stopped = false;
-    if (!this.persistence) this.persistence = persistSession(this.session);
+    if (!this.persistence) this.persistence = persistSession(this.session, {
+      identity: () => this.workspace.identity,
+      saveSession: (session, identity) => this.workspace.saveSession(identity!, session),
+      saveReviewChanges: (review, identity) => this.workspace.saveReview(identity!, review),
+    });
     else this.persistence.start();
   }
   stop() {
