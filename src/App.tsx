@@ -5,6 +5,7 @@ import { DataList } from './DataList';
 import { DataPanel } from './DataPanel';
 import { FileEditor } from './FileEditor';
 import { FileList } from './FileList';
+import { DocumentProvider } from './documentContext';
 import { PreviewPanel } from './PreviewPanel';
 import { useGeneration, useLifecycle, useSession, useStudio, useWorkspace } from './studioContext';
 
@@ -89,6 +90,7 @@ export function App() {
     </header>
 
     <div className="work-area">
+      <DocumentProvider key={generation}>
       <aside className="left-rail">
         <div className="rail-tabs"><button className={tab === 'files' ? 'active' : ''} onClick={() => setTab('files')}><Code2 size={16} /> Project</button><button className={tab === 'data' ? 'active' : ''} onClick={() => setTab('data')}><FileSpreadsheet size={16} /> Studio data</button></div>
         <div className="rail-heading"><span>{tab === 'files' ? 'PROJECT FILES' : 'STUDIO FIXTURES'}</span><button onClick={() => { setNewItem(tab === 'files' ? 'file' : 'table'); setNewItemName(''); }} title={tab === 'files' ? 'New file' : 'New fixture'}><FilePlus2 size={15} /></button></div>
@@ -103,11 +105,12 @@ export function App() {
         </div>
 
         <div className={`workspace-split ${view}`} style={{ display: tab === 'files' ? undefined : 'none' }}>
-          <FileEditor key={generation} path={selected} visible={tab === 'files' && view !== 'preview'} />
+          <FileEditor path={selected} visible={tab === 'files' && view !== 'preview'} />
           {tab === 'files' && view !== 'code' && <PreviewPanel reload={previewVersion} />}
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} hidden={tab !== 'data'}><DataPanel key={generation} selectedTableId={selectedTableId} onImport={openTableImport} /></div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} hidden={tab !== 'data'}><DataPanel selectedTableId={selectedTableId} onImport={openTableImport} /></div>
       </main>
+      </DocumentProvider>
 
       <AgentPane open={rightOpen} onClose={closeAgent} apiKey={key} onNeedsKey={openSettings} />
       {!rightOpen && <button className="agent-reopen" onClick={() => setRightOpen(true)}><Sparkles size={17} /> Agent</button>}

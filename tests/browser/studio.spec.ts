@@ -72,6 +72,84 @@ test('table drafts survive preview changes and navigation, then reload explicitl
   await page.getByRole('button', { name: 'Reload accepted', exact: true }).click();
   await expect(title).toHaveValue('Original'); await expect(page.locator('.table-scroll tbody tr')).toHaveCount(2);
 });
+
+for (const deleteWhileAway of [false, true]) {
+  const timing = deleteWhileAway ? 'after navigating away' : 'while selected';
+  test(`deleted file drafts remain selectable and recoverable ${timing}`, async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.evaluate(() => (window as any).__studioTest.fault('activation'));
+    await type(page, '\n// deleted file recovery');
+    await expect(page.getByRole('button', { name: 'Unsaved · Retry' })).toBeVisible();
+    if (deleteWhileAway) await page.getByRole('button', { name: 'styles.css', exact: true }).click();
+    await page.evaluate(async () => {
+      const c = (window as any).__studioTest; c.fault(); await c.runtime.workspace.remove('app.js');
+    });
+    const retained = page.getByRole('button', { name: 'app.js Deleted · draft', exact: true });
+    await expect(retained).toBeVisible();
+    await page.getByRole('button', { name: 'Studio data', exact: true }).click();
+    await page.getByRole('button', { name: 'Project', exact: true }).click();
+    await expect(retained).toBeVisible();
+    await page.getByRole('button', { name: 'styles.css', exact: true }).click();
+    await retained.click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Accepted file deleted' })).toBeVisible();
+    await expect.poll(() => modelText(page)).toContain('deleted file recovery');
+    await type(page, '\n// more retained input');
+    await page.getByRole('button', { name: 'Copy draft', exact: true }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('more retained input');
+    expect(await page.evaluate(() => (window as any).__studioTest.runtime.workspace.files.has('app.js'))).toBe(false);
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await expect(retained).toHaveCount(0);
+    await expect(page.locator('.editor-pane')).toContainText('No `app.js` project file.');
+    expect(await page.evaluate(() => (window as any).__studioTest.runtime.workspace.files.has('app.js'))).toBe(false);
+    await page.getByRole('button', { name: 'styles.css', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Copy draft', exact: true })).toHaveCount(0);
+  });
+
+  test(`deleted table drafts remain selectable and recoverable ${timing}`, async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: 'Studio data', exact: true }).click();
+    const title = page.locator('.table-scroll tbody tr').first().locator('input').nth(1);
+    await expect(title).toHaveValue('Original'); await title.fill('Deleted table recovery');
+    if (deleteWhileAway) await page.getByRole('button', { name: /^other/ }).click();
+    await page.evaluate(() => (window as any).__studioTest.runtime.workspace.removeFixture('fixtures/todos.csv'));
+    const retained = page.getByRole('button', { name: 'todos Deleted · draft', exact: true });
+    await expect(retained).toBeVisible();
+    await page.getByRole('button', { name: 'Project', exact: true }).click();
+    await page.getByRole('button', { name: 'Studio data', exact: true }).click();
+    await expect(retained).toBeVisible();
+    await page.getByRole('button', { name: /^other/ }).click(); await retained.click();
+    await expect(page.getByRole('alert').filter({ hasText: 'Accepted table deleted' })).toBeVisible();
+    await expect(title).toHaveValue('Deleted table recovery');
+    await expect(page.getByRole('button', { name: 'Save table', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Convert to XLSX', exact: true })).toBeDisabled();
+    await title.fill('More retained rows');
+    await page.getByRole('button', { name: 'Copy draft', exact: true }).click();
+    const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+    expect(copied.rows[0].title).toBe('More retained rows');
+    expect(await page.evaluate(() => (window as any).__studioTest.runtime.workspace.fixtures.has('fixtures/todos.csv'))).toBe(false);
+    await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
+    await expect(retained).toHaveCount(0);
+    await expect(page.locator('.table-empty')).toContainText('No `todos` studio fixture.');
+    expect(await page.evaluate(() => (window as any).__studioTest.runtime.workspace.fixtures.has('fixtures/todos.csv'))).toBe(false);
+    await page.getByRole('button', { name: /^other/ }).click();
+    await expect(title).toHaveValue('Other');
+    await expect(page.getByRole('button', { name: 'Copy draft', exact: true })).toHaveCount(0);
+  });
+}
+
+test('clean deleted files and parsed tables disappear from navigation', async ({ page }) => {
+  await page.getByRole('button', { name: 'styles.css', exact: true }).click();
+  await page.getByRole('button', { name: 'app.js', exact: true }).click();
+  await page.evaluate(() => (window as any).__studioTest.runtime.workspace.remove('styles.css'));
+  await expect(page.getByRole('button', { name: /^styles.css/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Studio data', exact: true }).click();
+  await expect(page.locator('.table-scroll tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: /^other/ }).click();
+  await expect(page.locator('.table-scroll tbody tr input').nth(1)).toHaveValue('Other');
+  await page.evaluate(() => (window as any).__studioTest.runtime.workspace.removeFixture('fixtures/todos.csv'));
+  await expect(page.getByRole('button', { name: /^todos/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Discard draft', exact: true })).toHaveCount(0);
+});
 test('failed replacement retains editor recovery and successful activation disposes old models', async ({ page }) => {
   await page.evaluate(() => (window as any).__studioTest.fault('activation'));
   await type(page, '\n// retain across failed reset');
