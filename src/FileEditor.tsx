@@ -11,7 +11,7 @@ export const FileEditor = memo(function FileEditor({ path, visible }: { path: st
   const studio = useStudio();
   const generation = useGeneration();
   const bytes = useWorkspace(state => state.files.get(path));
-  const [documents] = useState(() => new EditorDocuments((path, text) => studio.saveFile(path, text, generation), studio.report));
+  const [documents] = useState(() => new EditorDocuments((path, text, bytes, isCurrent) => studio.saveFile(path, text, generation, { bytes, isCurrent }), studio.report, () => studio.workspace.store.getState().files));
   const [activated, setActivated] = useState(visible);
   const draft = useStore(documents.store, state => state.drafts.get(path));
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -21,13 +21,15 @@ export const FileEditor = memo(function FileEditor({ path, visible }: { path: st
 
   useEffect(() => {
     documents.start();
+    const unsubscribe = studio.workspace.store.subscribe(state => documents.observe(state.files));
     return () => {
+      unsubscribe();
       subscription.current?.dispose();
       // Detach the view before disposing its session-owned models.
       editor.current?.setModel(null);
       documents.stop();
     };
-  }, [documents]);
+  }, [documents, studio]);
 
   function onMount(instance: monaco.editor.IStandaloneCodeEditor) {
     subscription.current?.dispose();
@@ -40,6 +42,7 @@ export const FileEditor = memo(function FileEditor({ path, visible }: { path: st
     <div className="pane-label">
       <span className="pane-icon">{iconFor(path)}</span>{path}
       {draft?.status === 'saving' && <span role="status">Saving…</span>}
+      {draft?.status === 'conflict' && <><span role="alert">Draft conflicts with accepted file</span><button onClick={() => void navigator.clipboard.writeText(draft.text).catch(studio.report)}>Copy draft</button><button onClick={() => documents.reload(path)} title={draft.error}>Reload accepted</button></>}
       {draft?.status === 'error' && <button onClick={() => void documents.retry(path)} title={draft.error}>Unsaved · Retry</button>}
       <span className="pane-meta">{path.endsWith('.xlsx') ? 'BINARY' : language(path).toUpperCase()}</span>
     </div>

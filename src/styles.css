@@ -145,3 +145,7 @@
 .review-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
 .review-toggle:disabled { opacity: .5; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .review-toggle-track, .review-toggle-track > span { transition: none; } }
+
+.draft-recovery { display: flex; gap: 12px; align-items: center; padding: 10px 18px; color: #e6b85c; border-bottom: 1px solid var(--border); font-size: 12px; }
+.draft-recovery button, .pane-label button { padding: 4px 8px; border: 1px solid #66543a; border-radius: 4px; color: #e6b85c; background: transparent; cursor: pointer; }
+.pane-label [role="alert"] { color: #e6b85c; }

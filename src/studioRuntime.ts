@@ -1,3 +1,4 @@
+import { DraftConflict } from './draftConflict';
 import { createStore } from 'zustand/vanilla';
 import type { FileMap } from './workspace';
 import type { Selection } from './workspaceStorage';
@@ -70,8 +71,13 @@ export class StudioRuntime {
   };
   report = (error: unknown) => this.flash(String(error instanceof Error ? error.message : error));
 
-  saveFile(path: string, content: string, generation = this.generation) {
-    return this.transact(generation, writer => writer.write(path, toBytes(content)));
+  saveFile(path: string, content: string, generation = this.generation, expected?: { bytes?: Uint8Array; isCurrent?: () => boolean }) {
+    const baseline = expected?.bytes?.slice();
+    return this.transact(generation, async writer => {
+      if (expected?.isCurrent?.() === false) throw new Error('This document save was discarded');
+      if (expected && !sameBytes(writer.files.get(path), baseline)) throw new DraftConflict('file');
+      await writer.write(path, toBytes(content));
+    });
   }
   createFile(path: string) {
     return this.transact(this.generation, async writer => {
@@ -88,10 +94,13 @@ export class StudioRuntime {
   saveTable(table: Table, baseline: Uint8Array, generation: number, convert = false) {
     const draft = structuredClone(table), expected = baseline.slice();
     return this.transact(generation, async writer => {
-      if (!sameBytes(writer.fixtures.get(draft.path), expected)) throw new Error('This table changed since editing began. Reload it before saving.');
+      if (!sameBytes(writer.fixtures.get(draft.path), expected)) throw new DraftConflict('table');
       const next: Table = convert ? { ...draft, path: draft.path.replace(/\.(csv|xlsx)$/, draft.format === 'csv' ? '.xlsx' : '.csv'), format: draft.format === 'csv' ? 'xlsx' : 'csv' } : draft;
-      await writer.writeFixture(next.path, await tableBytes(next));
+      if (convert && writer.fixtures.has(next.path)) throw new DraftConflict('destination table');
+      const bytes = await tableBytes(next);
+      await writer.writeFixture(next.path, bytes);
       if (convert) await writer.removeFixture(draft.path);
+      return { table: next, bytes };
     });
   }
   async importTable(file: File) {

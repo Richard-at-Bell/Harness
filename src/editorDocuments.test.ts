@@ -1,7 +1,8 @@
+import { StudioRuntime } from './studioRuntime';
 import { memoryStorage } from './workspaceStorage';
 import { describe, expect, it, vi } from 'vitest';
 import { EditorDocuments } from './editorDocuments';
-import { Workspace, toBytes } from './workspace';
+import { newStudioChat, Workspace, toBytes } from './workspace';
 
 function deferred() {
   let resolve!: () => void;
@@ -83,5 +84,52 @@ describe('editor model ownership', () => {
     const replacement = new EditorDocuments(async () => {}, () => {});
     expect(replacement.modelPath('app.js')).not.toBe(appPath);
     expect(documents.modelPath('folder/a#b.js')).toContain('/folder/a%23b.js');
+  });
+});
+
+
+describe('file draft conflicts', () => {
+  it('retains failed text across external edits and never retries it over newer bytes', async () => {
+    let fail = true;
+    const workspace = new Workspace(memoryStorage({ write: async () => { if (fail) throw new Error('Full'); } }), new Map([['app.js', toBytes('baseline')]]));
+    const chat = newStudioChat();
+    const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+    const documents = new EditorDocuments((path, text, bytes, isCurrent) => studio.saveFile(path, text, 0, { bytes, isCurrent }), () => {}, () => workspace.store.getState().files);
+    const unsubscribe = workspace.store.subscribe(state => documents.observe(state.files));
+    await documents.edit('app.js', 'my recoverable draft');
+    fail = false; await workspace.write('app.js', toBytes('agent edit'));
+    expect(documents.store.getState().drafts.get('app.js')).toMatchObject({ text: 'my recoverable draft', status: 'conflict' });
+    await documents.retry('app.js'); await documents.edit('app.js', 'more local changes');
+    expect(workspace.text('app.js')).toBe('agent edit');
+    documents.reload('app.js');
+    expect(documents.store.getState().drafts.has('app.js')).toBe(false);
+    await documents.edit('app.js', 'deliberate fresh edit');
+    expect(workspace.text('app.js')).toBe('deliberate fresh edit');
+    unsubscribe(); documents.stop(); studio.stop();
+  });
+  it('advances owned save baselines without confusing acknowledgements with conflicts', async () => {
+    const workspace = new Workspace(memoryStorage(), new Map([['app.js', toBytes('baseline')]]));
+    const chat = newStudioChat();
+    const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+    const documents = new EditorDocuments((path, text, bytes, isCurrent) => studio.saveFile(path, text, 0, { bytes, isCurrent }), () => {}, () => workspace.store.getState().files);
+    const unsubscribe = workspace.store.subscribe(state => documents.observe(state.files));
+    await Promise.all([documents.edit('app.js', 'first'), documents.edit('app.js', 'latest')]);
+    expect(workspace.text('app.js')).toBe('latest'); expect(documents.store.getState().drafts.size).toBe(0);
+    await workspace.write('app.js', toBytes('external clean change'));
+    await documents.edit('app.js', 'edited new accepted content');
+    expect(workspace.text('app.js')).toBe('edited new accepted content');
+    unsubscribe(); documents.stop(); studio.stop();
+  });
+  it('checks the baseline inside the operation queue even before observation arrives', async () => {
+    const workspace = new Workspace(memoryStorage(), new Map([['app.js', toBytes('baseline')]]));
+    const chat = newStudioChat();
+    const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+    const documents = new EditorDocuments((path, text, bytes) => studio.saveFile(path, text, 0, { bytes }), () => {}, () => workspace.store.getState().files);
+    const external = workspace.write('app.js', toBytes('external'));
+    const local = documents.edit('app.js', 'local');
+    await Promise.all([external, local]);
+    expect(workspace.text('app.js')).toBe('external');
+    expect(documents.store.getState().drafts.get('app.js')?.status).toBe('conflict');
+    documents.stop(); studio.stop();
   });
 });
