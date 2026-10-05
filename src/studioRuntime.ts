@@ -52,8 +52,7 @@ export class StudioRuntime {
   };
   report = (error: unknown) => this.flash(String(error instanceof Error ? error.message : error));
 
-  saveFile(path: string, content: string) {
-    const generation = this.generation;
+  saveFile(path: string, content: string, generation = this.generation) {
     return this.transact(generation, writer => writer.write(path, toBytes(content)));
   }
   createFile(path: string) {

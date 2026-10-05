@@ -74,7 +74,7 @@ export function App() {
   return <div className="studio">
     <header className="topbar">
       <div className="brand"><div className="brand-mark"><LayoutPanelLeft size={18} strokeWidth={2.4} /></div><span>Workbench</span><span className="brand-beta">BETA</span></div>
-      <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state">Saved locally</span></div>
+      <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state">Browser workspace</span></div>
       <div className="topbar-actions">
         <button className="text-button" onClick={() => importRef.current?.click()} title="Import ZIP"><FolderOpen size={16} /> Import</button>
         <button className="text-button" onClick={exportProject} disabled={exportBusy} title="Export project, fixtures, and chats"><ArrowDownToLine size={16} /> {exportBusy ? 'Preparing ZIP…' : 'Export ZIP'}</button>
@@ -99,10 +99,10 @@ export function App() {
           <div className="view-switch">{tab === 'files' && <><button className={view === 'code' ? 'selected' : ''} onClick={() => setView('code')} title="Code"><Code2 size={15} /></button><button className={view === 'split' ? 'selected' : ''} onClick={() => setView('split')} title="Split"><LayoutPanelLeft size={15} /></button><button className={view === 'preview' ? 'selected' : ''} onClick={() => setView('preview')} title="Preview"><Play size={15} /></button></>}<button onClick={() => setPreviewVersion(v => v + 1)} title="Reload preview"><RefreshCw size={15} /></button></div>
         </div>
 
-        {tab === 'files' && <div className={`workspace-split ${view}`}>
-          {view !== 'preview' && <FileEditor key={`${generation}:${selected}`} path={selected} />}
-          {view !== 'code' && <PreviewPanel reload={previewVersion} />}
-        </div>}
+        <div className={`workspace-split ${view}`} style={{ display: tab === 'files' ? undefined : 'none' }}>
+          <FileEditor key={generation} path={selected} visible={tab === 'files' && view !== 'preview'} />
+          {tab === 'files' && view !== 'code' && <PreviewPanel reload={previewVersion} />}
+        </div>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} hidden={tab !== 'data'}><DataPanel selectedTableId={selectedTableId} onImport={openTableImport} /></div>
       </main>
 

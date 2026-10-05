@@ -54,6 +54,14 @@ describe('fixture operation boundaries', () => {
 
 
 describe('workspace replacement and export context', () => {
+  it('rejects a save submitted by an editor from an earlier generation', async () => {
+    const studio = setup();
+    const editorGeneration = studio.generation;
+    await studio.resetProject();
+    await expect(studio.saveFile('app.js', 'old editor buffer', editorGeneration)).rejects.toThrow('earlier workspace');
+    expect(studio.workspace.text('app.js')).toBe(templateFiles['app.js']);
+    studio.stop();
+  });
   it('invalidates queued old requests at the reset boundary', async () => {
     const studio = setup();
     let release!: () => void;
