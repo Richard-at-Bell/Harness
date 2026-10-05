@@ -88,3 +88,17 @@ describe('agent workflow coordination', () => {
     expect(context.session.store.getState().pending).toBeNull();
   });
 });
+
+
+it('retains a failed review acceptance intact and accepts it on retry', async () => {
+  let fail = true;
+  const context = setup(async (_text, _key, _model, stage) => { stage.write('index.html', 'one'); stage.write('new.js', 'two'); return { text: 'Done', messages: [] }; }, async () => { if (fail) throw new Error('Full'); });
+  await context.turns.send('edit both', 'key');
+  const pending = context.session.store.getState().pending;
+  await expect(context.turns.accept()).rejects.toThrow('Full');
+  expect(context.workspace.text('index.html')).toBe('Old'); expect(context.workspace.files.has('new.js')).toBe(false);
+  expect(context.session.store.getState().pending).toBe(pending); expect(context.session.store.getState().accepting).toBe(false);
+  fail = false; await context.turns.accept();
+  expect(context.workspace.text('index.html')).toBe('one'); expect(context.workspace.text('new.js')).toBe('two');
+  expect(context.session.store.getState().pending).toBeNull();
+});

@@ -69,10 +69,12 @@ describe('workspace replacement and export context', () => {
     const gate = new Promise<void>(done => { release = done; });
     const blocker = studio.workspace.transaction(async () => { await gate; });
     const resetting = studio.resetProject();
+    await Promise.resolve();
     const stale = studio.tableRequest(0, 'todos', 'insert', { id: 'stale' }, () => true);
+    const rejection = expect(stale).rejects.toThrow('replacement is committing');
     release(); await blocker;
     expect(await resetting).toBe(1);
-    await expect(stale).rejects.toThrow('earlier workspace');
+    await rejection;
     expect(studio.workspace.text('app.js')).toBe(templateFiles['app.js']);
     expect((await readTable(studio.workspace.fixtures, 'todos')).rows.some(row => row.id === 'stale')).toBe(false);
     studio.stop();
@@ -92,5 +94,62 @@ describe('workspace replacement and export context', () => {
     expect(studio.session.store.getState().chats[0].chat.at(-1)?.text).not.toBe('Old callback');
     expect(studio.session.store.getState().pending).toBeNull();
     studio.stop();
+  });
+});
+
+
+describe('replacement lifecycle', () => {
+  it('permits work during preparation, gates commit and publishes identity with new contents', async () => {
+    let prepared!: () => void, durable!: () => void, entered!: () => void;
+    const preparing = new Promise<void>(done => { prepared = done; });
+    const writing = new Promise<void>(done => { durable = done; });
+    const committing = new Promise<void>(done => { entered = done; });
+    let block = false;
+    const workspace = new Workspace(memoryStorage({ write: async () => { if (block) { entered(); await writing; } } }), new Map([['old.js', toBytes('old')]]));
+    const chat = newStudioChat();
+    const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+    const next = newStudioChat();
+    const observations: string[] = [];
+    studio.lifecycleStore.subscribe(state => { if (state.generation === 1) observations.push(new TextDecoder().decode(workspace.store.getState().files.get('new.js'))); });
+    const replacement = studio.replaceWorkspace(async () => { await preparing; return { files: new Map([['new.js', toBytes('new')]]), fixtures: new Map(), session: { version: 2, chats: [next], activeChatId: next.id }, selection: { file: 'new.js', tableId: 'empty', tab: 'files' } }; });
+    expect(studio.phase).toBe('preparing');
+    await studio.saveFile('old.js', 'edit during preparation');
+    block = true; prepared(); await committing;
+    expect(studio.phase).toBe('committing'); expect(studio.generation).toBe(0);
+    expect(workspace.text('old.js')).toBe('edit during preparation');
+    await expect(studio.saveFile('old.js', 'late edit')).rejects.toThrow('committing');
+    expect(await studio.turns.send('start during commit', 'controlled-key')).toBe(false);
+    durable(); await replacement;
+    expect(studio.phase).toBe('idle'); expect(studio.generation).toBe(1);
+    expect(observations.every(text => text === 'new')).toBe(true);
+    expect(studio.session.store.getState().activeChatId).toBe(next.id);
+    expect(studio.lifecycleStore.getState().selection.file).toBe('new.js');
+    await expect(studio.saveFile('old.js', 'old identity', 0)).rejects.toThrow('earlier workspace');
+    studio.stop();
+  });
+  it('keeps accepted state, pending review and navigation after failed commit, then retries', async () => {
+    let fail = true;
+    const workspace = new Workspace(memoryStorage({ write: async () => { if (fail) throw new Error('Storage unavailable'); } }), new Map([['old.js', toBytes('old')]]));
+    const chat = newStudioChat();
+    const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+    const turn = studio.session.begin('review', 0)!;
+    const stage = workspace.stage(); stage.write('old.js', 'review'); studio.session.finish(turn, stage);
+    const pending = studio.session.store.getState().pending;
+    const before = workspace.store.getState(), selection = studio.lifecycleStore.getState().selection;
+    await expect(studio.resetProject()).rejects.toThrow('Storage unavailable');
+    expect(studio.phase).toBe('failed'); expect(studio.generation).toBe(0);
+    expect(workspace.store.getState()).toBe(before);
+    expect(studio.session.store.getState().pending).toBe(pending);
+    expect(studio.lifecycleStore.getState().selection).toBe(selection);
+    fail = false; await studio.saveFile('old.js', 'recoverable edit');
+    await studio.resetProject(); expect(studio.generation).toBe(1);
+    expect(studio.session.store.getState().pending).toBeNull(); studio.stop();
+  });
+  it('does not destroy prior state when ZIP validation fails', async () => {
+    const studio = setup(), before = studio.workspace.store.getState();
+    await expect(studio.importProject(new File(['not a ZIP'], 'bad.zip'))).rejects.toThrow();
+    expect(studio.phase).toBe('failed'); expect(studio.generation).toBe(0);
+    expect(studio.workspace.store.getState()).toBe(before);
+    await studio.saveFile('index.html', 'still editable'); studio.stop();
   });
 });

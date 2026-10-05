@@ -200,8 +200,8 @@ export class Workspace {
         const previous = this.publication.getState();
         // Accepted service data is already new when activation observers run.
         // Runtime keeps operation gating in place until all stores are reconciled.
-        activation?.activate();
         this.publication.setState({ files: publishFiles(files, previous.files), fixtures: publishFiles(fixtures, previous.fixtures), revision: this.revision, identity: this.identity });
+        activation?.activate();
       }
       return result;
     };

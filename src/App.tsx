@@ -6,7 +6,7 @@ import { DataPanel } from './DataPanel';
 import { FileEditor } from './FileEditor';
 import { FileList } from './FileList';
 import { PreviewPanel } from './PreviewPanel';
-import { useGeneration, useSession, useStudio, useWorkspace } from './studioContext';
+import { useGeneration, useLifecycle, useSession, useStudio, useWorkspace } from './studioContext';
 
 function Notice() {
   const studio = useStudio(), notice = useSession(state => state.notice);
@@ -23,11 +23,14 @@ export function App() {
   const generation = useGeneration();
   const importRef = useRef<HTMLInputElement>(null);
   const tableImportRef = useRef<HTMLInputElement>(null);
-  const [selected, setSelected] = useState('app.js');
-  const [tab, setTab] = useState<'files' | 'data'>('files');
+  const selection = useLifecycle(state => state.selection);
+  const phase = useLifecycle(state => state.phase);
+  const { file: selected, tab, tableId: selectedTableId } = selection;
+  const setSelected = (file: string) => studio.select({ file });
+  const setTab = (tab: 'files' | 'data') => studio.select({ tab });
+  const setSelectedTableId = (tableId: string) => studio.select({ tableId });
   const [view, setView] = useState<'split' | 'code' | 'preview'>(() => window.innerWidth <= 1200 ? 'preview' : 'split');
   const [previewVersion, setPreviewVersion] = useState(0);
-  const [selectedTableId, setSelectedTableId] = useState('todos');
   const [key, setKey] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newItem, setNewItem] = useState<'file' | 'table' | null>(null);
@@ -44,7 +47,7 @@ export function App() {
   const openTableImport = useCallback(() => tableImportRef.current?.click(), []);
 
   async function importProject(file: File) {
-    try { const result = await studio.importProject(file); if (studio.generation !== result.generation) return; setSelected('index.html'); setSelectedTableId(result.tableId); setTab('files'); } catch (error) { studio.report(error); }
+    try { await studio.importProject(file); } catch (error) { studio.report(error); }
   }
   async function exportProject() {
     if (exportLock.current) return;
@@ -55,7 +58,7 @@ export function App() {
   }
   async function resetProject() {
     if (!window.confirm('Replace this project, its studio fixtures, and chats with a fresh to-do template? Export first if you want to keep your work.')) return;
-    try { const committed = await studio.resetProject(); if (studio.generation !== committed) return; setSelected('app.js'); setSelectedTableId('todos'); } catch (error) { studio.report(error); }
+    try { await studio.resetProject(); } catch (error) { studio.report(error); }
   }
   async function createNewItem() {
     const name = newItemName.trim();
@@ -74,7 +77,7 @@ export function App() {
   return <div className="studio">
     <header className="topbar">
       <div className="brand"><div className="brand-mark"><LayoutPanelLeft size={18} strokeWidth={2.4} /></div><span>Workbench</span><span className="brand-beta">BETA</span></div>
-      <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state">Browser workspace</span></div>
+      <div className="topbar-center"><span className="project-dot" /> To-do project <ChevronDown size={14} /><span className="save-state" role="status">{phase === 'preparing' ? 'Preparing replacement…' : phase === 'committing' ? 'Replacing workspace…' : 'Browser workspace'}</span></div>
       <div className="topbar-actions">
         <button className="text-button" onClick={() => importRef.current?.click()} title="Import ZIP"><FolderOpen size={16} /> Import</button>
         <button className="text-button" onClick={exportProject} disabled={exportBusy} title="Export project, fixtures, and chats"><ArrowDownToLine size={16} /> {exportBusy ? 'Preparing ZIP…' : 'Export ZIP'}</button>
@@ -103,7 +106,7 @@ export function App() {
           <FileEditor key={generation} path={selected} visible={tab === 'files' && view !== 'preview'} />
           {tab === 'files' && view !== 'code' && <PreviewPanel reload={previewVersion} />}
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} hidden={tab !== 'data'}><DataPanel selectedTableId={selectedTableId} onImport={openTableImport} /></div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }} hidden={tab !== 'data'}><DataPanel key={generation} selectedTableId={selectedTableId} onImport={openTableImport} /></div>
       </main>
 
       <AgentPane open={rightOpen} onClose={closeAgent} apiKey={key} onNeedsKey={openSettings} />

@@ -1,4 +1,6 @@
 import { createStore } from 'zustand/vanilla';
+import type { FileMap } from './workspace';
+import type { Selection } from './workspaceStorage';
 import { createAgentTurns } from './agentTurns';
 import { createSession, sessionRecord } from './sessionStore';
 import { persistSession } from './sessionPersistence';
@@ -7,9 +9,12 @@ import { fixtureIds, readTable, tableBytes, type Row, type Table } from './fixtu
 import { templateFiles, templateFixtures } from './template';
 import { copyFiles, newStudioChat, sameBytes, toBytes, validProjectPath, Workspace, type SavedSession, type WorkspaceWriter } from './workspace';
 
+export type ReplacementPhase = 'idle' | 'preparing' | 'committing' | 'failed';
+export type Lifecycle = { generation: number; phase: ReplacementPhase; error?: string; selection: Selection };
+
 export class StudioRuntime {
   readonly session;
-  private readonly lifecycle = createStore(() => ({ generation: 0 }));
+  private readonly lifecycle;
   readonly lifecycleStore;
   readonly turns;
   private stopped = false;
@@ -18,9 +23,10 @@ export class StudioRuntime {
 
   constructor(readonly workspace: Workspace, saved: SavedSession, review: boolean) {
     this.session = createSession(saved, review);
+    this.lifecycle = createStore<Lifecycle>()(() => ({ generation: 0, phase: 'idle', selection: workspace.opened?.selection ?? { file: workspace.files.has('app.js') ? 'app.js' : [...workspace.files.keys()][0] || 'index.html', tableId: fixtureIds(workspace.fixtures)[0] || 'todos', tab: 'files' } }));
     const { getState, getInitialState, subscribe } = this.lifecycle;
     this.lifecycleStore = { getState, getInitialState, subscribe };
-    this.turns = createAgentTurns({ workspace, session: this.session, generation: () => this.generation, transact: this.transact, flash: this.flash });
+    this.turns = createAgentTurns({ workspace, session: this.session, generation: () => this.generation, transact: this.transact, flash: this.flash, isAvailable: () => !this.stopped && this.phase !== 'committing' });
   }
   static async open() {
     const workspace = await Workspace.open();
@@ -29,6 +35,8 @@ export class StudioRuntime {
     return studio;
   }
   get generation() { return this.lifecycle.getState().generation; }
+  get phase() { return this.lifecycle.getState().phase; }
+  select(selection: Partial<Selection>) { if (this.phase !== 'committing') this.lifecycle.setState(current => ({ selection: { ...current.selection, ...selection } })); }
   start() {
     this.stopped = false;
     if (!this.persistence) this.persistence = persistSession(this.session, {
@@ -47,10 +55,14 @@ export class StudioRuntime {
   private advanceGeneration() {
     this.lifecycle.setState({ generation: this.generation + 1 }); this.turns.cancel();
   }
-  transact = <T>(generation: number, operation: (writer: WorkspaceWriter) => Promise<T>): Promise<T> => this.workspace.transaction(async writer => {
-    if (this.stopped || generation !== this.generation) throw new Error('This operation belongs to an earlier workspace');
-    return operation(writer);
-  });
+  transact = <T>(generation: number, operation: (writer: WorkspaceWriter) => Promise<T>): Promise<T> => {
+    if (this.stopped || generation !== this.generation) return Promise.reject(new Error('This operation belongs to an earlier workspace'));
+    if (this.phase === 'committing') return Promise.reject(new Error('Workspace replacement is committing. Your draft is retained; retry after it finishes.'));
+    return this.workspace.transaction(async writer => {
+      if (this.stopped || generation !== this.generation) throw new Error('This operation belongs to an earlier workspace');
+      return operation(writer);
+    });
+  };
   flash = (message: string) => {
     if (this.stopped) return;
     clearTimeout(this.noticeTimer); this.session.notice(message);
@@ -121,29 +133,49 @@ export class StudioRuntime {
       return value;
     });
   }
-  async importProject(file: File) {
+  // Preparation permits ordinary work. Commit gates new requests immediately;
+  // already queued operations finish before replacement. Failure keeps identity,
+  // session, navigation, buffers and preview capabilities of the prior workspace.
+  async replaceWorkspace(prepare: () => Promise<{ files: FileMap; fixtures: FileMap; session: SavedSession; selection: Selection }>) {
+    if (this.stopped || this.phase === 'preparing' || this.phase === 'committing') throw new Error('Workspace replacement is already in progress or the studio is closed');
     const captured = this.generation;
-    const imported = await importZip(file);
-    let committedGeneration = captured;
-    await this.transact(captured, async writer => {
-      this.advanceGeneration(); committedGeneration = this.generation;
-      await writer.replace(imported.files, imported.fixtures);
-      this.session.replaceSession({ version: 2, chats: imported.chats, activeChatId: imported.activeChatId });
+    this.lifecycle.setState({ phase: 'preparing', error: undefined });
+    try {
+      const prepared = await prepare();
+      if (this.stopped || captured !== this.generation) throw new Error('This replacement belongs to an earlier workspace');
+      const replacement = { identity: crypto.randomUUID(), session: structuredClone(prepared.session), selection: prepared.selection };
+      this.lifecycle.setState({ phase: 'committing' });
+      await this.workspace.transaction(async writer => {
+        if (this.stopped || captured !== this.generation) throw new Error('This replacement belongs to an earlier workspace');
+        await writer.replace(prepared.files, prepared.fixtures);
+      }, { replacement, activate: () => {
+        if (this.stopped) return;
+        this.turns.cancel();
+        this.session.replaceSession(replacement.session);
+        this.lifecycle.setState({ generation: captured + 1, selection: replacement.selection });
+      } });
+      if (!this.stopped) this.lifecycle.setState({ phase: 'idle' });
+      return { tableId: replacement.selection.tableId, generation: captured + 1 };
+    } catch (error) {
+      if (!this.stopped) this.lifecycle.setState({ phase: 'failed', error: String(error instanceof Error ? error.message : error) });
+      throw error;
+    }
+  }
+  async importProject(file: File) {
+    const result = await this.replaceWorkspace(async () => {
+      const imported = await importZip(file);
+      return { ...imported, session: { version: 2, chats: imported.chats, activeChatId: imported.activeChatId }, selection: { file: imported.files.has('index.html') ? 'index.html' : [...imported.files.keys()][0], tableId: fixtureIds(imported.fixtures)[0] || 'todos', tab: 'files' } };
     });
-    if (committedGeneration === this.generation) this.flash('Project imported.');
-    return { tableId: fixtureIds(imported.fixtures)[0] || 'todos', generation: committedGeneration };
+    if (result.generation === this.generation) this.flash('Project imported.');
+    return result;
   }
   async resetProject() {
-    const captured = this.generation;
-    let committedGeneration = captured;
-    const chat = newStudioChat(this.session.store.getState().chats.find(chat => chat.id === this.session.store.getState().activeChatId)!.modelId);
-    await this.transact(captured, async writer => {
-      this.advanceGeneration(); committedGeneration = this.generation;
-      await writer.replace(new Map(Object.entries(templateFiles).map(([p, v]) => [p, toBytes(v)])), new Map(Object.entries(templateFixtures).map(([p, v]) => [p, toBytes(v)])));
-      this.session.replaceSession({ version: 2, chats: [chat], activeChatId: chat.id });
+    const result = await this.replaceWorkspace(async () => {
+      const chat = newStudioChat(this.session.store.getState().chats.find(chat => chat.id === this.session.store.getState().activeChatId)!.modelId);
+      return { files: new Map(Object.entries(templateFiles).map(([p, v]) => [p, toBytes(v)])), fixtures: new Map(Object.entries(templateFixtures).map(([p, v]) => [p, toBytes(v)])), session: { version: 2, chats: [chat], activeChatId: chat.id }, selection: { file: 'app.js', tableId: 'todos', tab: 'files' } };
     });
-    if (committedGeneration === this.generation) this.flash('Fresh to-do project created.');
-    return committedGeneration;
+    if (result.generation === this.generation) this.flash('Fresh to-do project created.');
+    return result.generation;
   }
   async exportProject() {
     const snapshot = await this.transact(this.generation, async writer => ({ files: copyFiles(writer.files), fixtures: copyFiles(writer.fixtures), session: structuredClone(sessionRecord(this.session.store.getState())) }));

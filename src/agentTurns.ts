@@ -9,6 +9,7 @@ export type TurnContext = {
   generation: () => number;
   transact: <T>(generation: number, operation: (writer: WorkspaceWriter) => Promise<T>) => Promise<T>;
   flash: (message: string) => void;
+  isAvailable?: () => boolean;
 };
 
 export function createAgentTurns(context: TurnContext, runner = runAgent) {
@@ -18,7 +19,7 @@ export function createAgentTurns(context: TurnContext, runner = runAgent) {
     cancel() { abort?.abort(); session.invalidate(); },
     async send(text: string, key: string) {
       text = text.trim();
-      if (!text || !key.trim()) return false;
+      if (!text || !key.trim() || context.isAvailable?.() === false) return false;
       // Capture identity, mode and model before any asynchronous work.
       const prior = activeChat(session.store.getState()).agentMessages;
       const turn = session.begin(text, context.generation());
