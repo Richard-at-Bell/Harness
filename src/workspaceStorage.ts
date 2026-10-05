@@ -1,5 +1,5 @@
 import { openDB, type IDBPDatabase } from 'idb';
-import { copyFiles, sameBytes, validFixturePath, validProjectPath, type FileMap, type SavedSession } from './workspace';
+import { sameBytes, validFixturePath, validProjectPath, type FileMap, type SavedSession } from './workspace';
 
 export type Selection = { file: string; tableId: string; tab: 'files' | 'data' };
 export type Replacement = { identity: string; session: SavedSession; selection: Selection };
@@ -17,6 +17,10 @@ export class RevisionConflict extends Error {
 type Pointer = { revision: number; identity: string };
 type Manifest = Replacement & { revision: number; files: [string, string][]; fixtures: [string, string][]; review: boolean };
 type Session = { identity: string; session: SavedSession; review: boolean };
+function completeSession(session?: SavedSession): session is SavedSession {
+  return session?.version === 2 && Array.isArray(session.chats) && session.chats.length > 0 && session.chats.some(c => c?.id === session.activeChatId) && session.chats.every(c => c && typeof c.id === 'string' && Array.isArray(c.chat) && Array.isArray(c.tools) && Array.isArray(c.agentMessages) && typeof c.modelId === 'string');
+}
+
 export const WORKSPACE_DB = 'browser-project-studio-commits-v1';
 export type StorageBoundary = 'prepared' | 'after-write' | 'before-activation' | 'activation';
 // Hooks inject errors in tests; transaction hooks must be synchronous. Preparation
@@ -49,7 +53,7 @@ export class IndexedWorkspaceStorage implements WorkspaceStorage {
     const candidates = manifests.filter(m => m.revision <= (pointer?.revision ?? Infinity)).sort((a, b) => b.revision - a.revision);
     for (const manifest of candidates) {
       try {
-        if (!manifest.identity || !manifest.session.chats.length || !manifest.session.chats.some(c => c.id === manifest.session.activeChatId)) throw new Error('Invalid metadata');
+        if (!manifest.identity || !completeSession(manifest.session)) throw new Error('Invalid metadata');
         for (const [fixture, entries] of [[false, manifest.files], [true, manifest.fixtures]] as const) {
           const paths = new Set<string>();
           for (const [path, hash] of entries) {
@@ -59,23 +63,27 @@ export class IndexedWorkspaceStorage implements WorkspaceStorage {
             if (!verified.get(hash)) throw new Error('Missing or corrupt bytes');
           }
         }
-        const result: CommittedWorkspace = { ...manifest, files: new Map(manifest.files.map(([p, h]) => [p, blobs.get(h)!.slice()])), fixtures: new Map(manifest.fixtures.map(([p, h]) => [p, blobs.get(h)!.slice()])) };
-        if (session?.identity === manifest.identity) { result.session = session.session; result.review = session.review; }
-        if (!pointer || manifest.revision !== pointer.revision || manifest.identity !== pointer.identity) {
-          // Recovery is itself a CAS activation, never a regression of revision.
-          const repair = this.db.transaction(['meta', 'manifests'], 'readwrite', { durability: 'strict' });
+      } catch { continue; }
+      const result: CommittedWorkspace = { ...manifest, files: new Map(manifest.files.map(([p, h]) => [p, blobs.get(h)!.slice()])), fixtures: new Map(manifest.fixtures.map(([p, h]) => [p, blobs.get(h)!.slice()])) };
+      if (session?.identity === manifest.identity && completeSession(session.session)) { result.session = session.session; result.review = session.review; }
+      else if (session?.identity === manifest.identity) result.recovery = 'Recovered chat metadata from the accepted manifest; newer damaged chat metadata was ignored.';
+      if (!pointer || manifest.revision !== pointer.revision || manifest.identity !== pointer.identity) {
+        // Recovery is itself a CAS activation, never a regression of revision.
+        const repair = this.db.transaction(['meta', 'manifests'], 'readwrite', { durability: 'strict' });
+        try {
           const current = await repair.objectStore('meta').get('active') as Pointer | undefined;
           if (current?.revision !== pointer?.revision || current?.identity !== pointer?.identity) { repair.abort(); await repair.done.catch(() => {}); throw new RevisionConflict(); }
           result.revision = Math.max(pointer?.revision ?? 0, ...manifests.map(m => m.revision)) + 1;
+          for (const damaged of candidates) if (damaged.revision > manifest.revision) await repair.objectStore('manifests').delete(damaged.revision);
           await repair.objectStore('manifests').put({ ...manifest, revision: result.revision, session: result.session, review: result.review }, result.revision);
           await repair.objectStore('meta').put({ revision: result.revision, identity: result.identity }, 'active');
           await repair.objectStore('meta').put({ identity: result.identity, session: result.session, review: result.review }, 'session');
           await repair.done;
-          result.recovery = 'Recovered the last complete local revision. The newest damaged revision was not loaded.';
-        }
-        await this.collect().catch(() => {});
-        return result;
-      } catch (error) { if (error instanceof RevisionConflict) throw error; }
+        } catch (error) { try { repair.abort(); } catch { /* already aborted */ } await repair.done.catch(() => {}); throw error; }
+        result.recovery = 'Recovered the last complete local revision. The newest damaged revision was not loaded.';
+      }
+      await this.collect().catch(() => {});
+      return result;
     }
     throw new Error('No complete local workspace revision can be recovered. Local records were preserved; restore an exported ZIP in a separate origin.');
   }
@@ -87,6 +95,8 @@ export class IndexedWorkspaceStorage implements WorkspaceStorage {
     ] }, initial.review);
   }
   async commit(request: Commit, initialReview = true) {
+    const expectedRevision = request.expectedRevision, replacementRequest = request.replacement && structuredClone(request.replacement);
+    if (replacementRequest && !completeSession(replacementRequest.session)) throw new Error('Invalid replacement session');
     const prepared = await Promise.all(request.changes.map(async change => {
       if (!(change.fixture ? validFixturePath(change.path) : validProjectPath(change.path))) throw new Error('Invalid commit path');
       const bytes = change.bytes?.slice();
@@ -97,11 +107,11 @@ export class IndexedWorkspaceStorage implements WorkspaceStorage {
     try {
       const meta = tx.objectStore('meta'), manifests = tx.objectStore('manifests'), blobs = tx.objectStore('blobs');
       const active = await meta.get('active') as Pointer | undefined;
-      if ((active?.revision ?? -1) !== request.expectedRevision) throw new RevisionConflict();
+      if ((active?.revision ?? -1) !== expectedRevision) throw new RevisionConflict();
       const prior = active ? await manifests.get(active.revision) as Manifest | undefined : undefined;
       if (active && !prior) throw new Error('Active manifest is missing; reopen to recover.');
       const saved = await meta.get('session') as Session | undefined;
-      const replacement = request.replacement ?? prior;
+      const replacement = replacementRequest ?? prior;
       if (!replacement) throw new Error('Initial commit requires session metadata');
       const files = new Map(prior?.files), fixtures = new Map(prior?.fixtures);
       for (const change of prepared) {
@@ -111,7 +121,7 @@ export class IndexedWorkspaceStorage implements WorkspaceStorage {
         this.hooks.boundary?.('after-write');
       }
       const revision = (active?.revision ?? -1) + 1;
-      const session = request.replacement?.session ?? saved?.session ?? replacement.session;
+      const session = replacementRequest?.session ?? (completeSession(saved?.session) ? saved.session : replacement.session);
       const review = saved?.review ?? initialReview;
       const manifest: Manifest = { ...replacement, session, review, revision, files: [...files], fixtures: [...fixtures] };
       this.hooks.boundary?.('before-activation');
@@ -172,4 +182,3 @@ export function changesBetween(files: FileMap, fixtures: FileMap, nextFiles: Fil
     return [...paths].filter(path => !sameBytes(before.get(path), after.get(path))).map(path => ({ fixture, path, bytes: after.get(path)?.slice() }));
   });
 }
-export const detachedWorkspace = (record: CommittedWorkspace): CommittedWorkspace => ({ ...structuredClone(record), files: copyFiles(record.files), fixtures: copyFiles(record.fixtures) });

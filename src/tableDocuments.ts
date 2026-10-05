@@ -4,7 +4,7 @@ import { DraftConflict } from './draftConflict';
 import { sameBytes, type FileSnapshot } from './workspace';
 import { RevisionConflict } from './workspaceStorage';
 
-export type TableDraft = { table: Table; baseline: Uint8Array; accepted?: Uint8Array; request: number; dirty: boolean; status: 'clean' | 'dirty' | 'saving' | 'error' | 'conflict'; error?: string };
+export type TableDraft = { table: Table; baseline: Uint8Array; accepted?: Uint8Array; request: number; dirty: boolean; status: 'clean' | 'dirty' | 'saving' | 'error' | 'conflict'; requiresReopen?: boolean; error?: string };
 // Parsed tables have explicit save/convert actions, unlike automatically saved
 // source buffers. They retain their own schema/row and parse lifetimes.
 export class TableDocuments {
@@ -75,12 +75,12 @@ export class TableDocuments {
       const current = this.state.getState().drafts.get(id);
       if (!current || current.status === 'conflict') return;
       const conflict = error instanceof DraftConflict || error instanceof RevisionConflict;
-      this.update(id, { ...current, status: conflict ? 'conflict' : 'error', error: String(error instanceof Error ? error.message : error) });
+      this.update(id, { ...current, status: conflict ? 'conflict' : 'error', requiresReopen: error instanceof RevisionConflict, error: String(error instanceof Error ? error.message : error) });
       this.report(error);
     } finally { if (epoch === this.epoch) this.saving.delete(id); }
   }
   async reload(id: string) {
-    if (this.saving.has(id) || this.state.getState().drafts.get(id)?.status === 'saving') return;
+    if (this.saving.has(id) || this.state.getState().drafts.get(id)?.status === 'saving' || this.state.getState().drafts.get(id)?.requiresReopen) return;
     this.update(id); await this.load(id);
   }
   // Copying the parsed representation preserves columns/rows even if its source

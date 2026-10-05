@@ -8,8 +8,8 @@ Status: **Draft for review**
 | **Project** | The user's authored HTML/CSS/JavaScript site and assets. It is the `project/` directory in an export. |
 | **Workspace** | The mutable browser-local project, Studio fixtures, and chat metadata. It is private to this site's browser origin. |
 | **Workspace service** | The sole file API used by Monaco, the agent, fixtures, preview builder, and exporter. |
-| **OPFS** | Origin private file system: browser storage for project bytes. It is not an ordinary folder visible in Finder or Explorer. |
-| **IndexedDB** | Browser database for sessions, metadata, and checkpoints. |
+| **OPFS** | Origin private file system: the legacy browser storage for project bytes, retained as a migration backup. It is not an ordinary folder visible in Finder or Explorer. |
+| **IndexedDB** | Authoritative browser database for accepted workspace revisions and session metadata. |
 | **Pi agent core** | The browser-usable part of Pi that runs conversation turns and tool calls. It is distinct from Pi's Node/Bun coding-agent SDK. |
 | **Agent tool** | A validated operation the model can request, such as reading a file or changing a table. The workspace service executes it. |
 | **Turn** | One user request and the agent's resulting messages and tool activity until it settles. |

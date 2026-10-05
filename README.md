@@ -9,11 +9,13 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite in a current Chromium browser. The workspace uses Origin Private File System and IndexedDB. The **Model settings** button accepts a user-provided OpenRouter key for the current tab only. The clickable [model picker](docs/model-selection.md) defaults to Claude Sonnet 5 and includes five alternatives.
+Open the local URL printed by Vite in a current Chromium browser. The workspace commits accepted revisions atomically in IndexedDB and migrates older OPFS data without deleting its backup. The **Model settings** button accepts a user-provided OpenRouter key for the current tab only. The clickable [model picker](docs/model-selection.md) defaults to Claude Sonnet 5 and includes five alternatives.
 
 ```sh
 npm test
 npm run build
+# Automated browser setup and isolation: tests/browser/README.md
+npm run test:browser
 ```
 
 The Vite output in `dist/` is a static site suitable for Vercel. No server API is required. Configure Vercel with the Vite framework preset or `npm run build` and `dist/` as the output directory.
@@ -31,3 +33,5 @@ The design documents and open decisions are in [docs/README.md](docs/README.md).
 ## Key handling
 
 The API key is held in page memory and sent directly to OpenRouter for model requests. It is not stored in project files or the ZIP. The user should still review project content and chat before sharing an export.
+
+See [state ownership and persistence guarantees](docs/state-ownership.md) for replacement phases, draft conflict recovery, migration and cross-tab limits.

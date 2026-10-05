@@ -1,11 +1,11 @@
 import { sessionRecord, type StudioSession } from './sessionStore';
-import { saveReviewChanges, saveSession, type SavedSession } from './workspace';
+import type { SavedSession } from './workspace';
 
 type Persistence = { identity?: () => string; saveSession: (session: SavedSession, identity?: string) => Promise<void>; saveReviewChanges: (review: boolean, identity?: string) => Promise<void> };
 
 // Subscribe only after hydration. Session records retain their existing format;
 // credentials, stages, notices and runtime resources never enter persistence.
-export function persistSession(session: StudioSession, storage: Persistence = { saveSession, saveReviewChanges }, delay = 350) {
+export function persistSession(session: StudioSession, storage: Persistence, delay = 350) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let queue: Promise<void> = Promise.resolve();
   let dirty = false;

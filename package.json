@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "measure:storage": "node tests/browser/measure.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.87.1",

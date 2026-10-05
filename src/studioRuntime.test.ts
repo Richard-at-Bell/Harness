@@ -153,3 +153,16 @@ describe('replacement lifecycle', () => {
     await studio.saveFile('index.html', 'still editable'); studio.stop();
   });
 });
+
+it('keeps both fixture paths unchanged when conversion persistence fails, then retries', async () => {
+  let fail = true;
+  const workspace = new Workspace(memoryStorage({ remove: async () => { if (fail) throw new Error('Removal failed'); } }), new Map(), new Map([['fixtures/todos.csv', toBytes('id,title\n1,Original\n')]]));
+  const chat = newStudioChat();
+  const studio = new StudioRuntime(workspace, { version: 2, chats: [chat], activeChatId: chat.id }, true);
+  const table = await readTable(workspace.fixtures, 'todos'), baseline = workspace.fixtures.get(table.path)!;
+  const before = workspace.store.getState();
+  await expect(studio.saveTable(table, baseline, 0, true)).rejects.toThrow('Removal failed');
+  expect(workspace.store.getState()).toBe(before); expect(workspace.fixtures.has('fixtures/todos.xlsx')).toBe(false);
+  fail = false; await studio.saveTable(table, baseline, 0, true);
+  expect(workspace.fixtures.has('fixtures/todos.csv')).toBe(false); expect(workspace.fixtures.has('fixtures/todos.xlsx')).toBe(true); studio.stop();
+});

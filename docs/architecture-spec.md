@@ -9,9 +9,9 @@ Vercel static assets
   └─ TypeScript studio application
        ├─ Monaco editor + diff view
        ├─ chat and Pi agent loop
-       ├─ workspace service ── OPFS project files
-       │                    └─ OPFS Studio fixture files
-       ├─ chat store ── IndexedDB conversations and active chat
+       ├─ workspace service ── IndexedDB project/fixture revisions
+       │                    └─ atomic manifests, byte records and activation metadata
+       ├─ chat store ── IndexedDB conversations and active chat (same database)
        ├─ fixture service ── normalized tables ↔ Studio CSV/XLSX files
        ├─ preview builder ── isolated iframe + data bridge
        └─ exporter ── versioned ZIP
@@ -19,7 +19,7 @@ Vercel static assets
 User key ── Pi model provider request
 ```
 
-The workspace service writes project files and Studio fixtures to separate OPFS roots. Monaco, agent tools, fixture operations, preview data writes, and export all use it. Review is on by default: an agent turn works in a staged branch based on the accepted revision. With review off, each successful mutation advances the accepted workspace immediately. Multiple chats share these files but keep separate conversation state.
+The workspace service commits project files and Studio fixtures as separate namespaces within one versioned IndexedDB manifest. Monaco, agent tools, fixture operations, preview data writes, and export all use it. Review is on by default: an agent turn works in a staged branch based on the accepted revision. With review off, each successful mutation advances the accepted workspace immediately. Multiple chats share these files but keep separate conversation state.
 
 The implemented reactive ownership and lifecycle boundaries are documented in the [state ownership map](state-ownership.md).
 
@@ -50,7 +50,7 @@ interface WorkspaceStage {
 
 `expectedRevision` rejects stale writes. In review mode, agent tools see their staged branch, including their earlier edits in the same turn. Acceptance atomically advances the accepted revision only when its base is still current; otherwise the user sees a conflict and can review again. The UI labels changes from the user, agent, fixture editor, or preview.
 
-OPFS stores project bytes and Studio fixture bytes in separate roots. IndexedDB stores chats, tool events, and active chat selection. Each chat keeps its own Pi context and model selection; the project and fixtures are shared. Browser storage remains subject to quota and deletion by the browser or user; export is the durable handoff. Atomic journaling remains a planned improvement.
+IndexedDB stores accepted project/fixture revisions, chats, tool events, and active chat selection. Legacy OPFS roots are read only during migration and retained as backups. Each chat keeps its own Pi context and model selection; the project and fixtures are shared. Browser storage remains subject to quota and deletion by the browser or user; export is the durable handoff. A commit atomically activates changed byte records, the complete manifest and replacement session metadata; see [implemented persistence boundaries](state-ownership.md).
 
 ## Agent seam
 
@@ -58,7 +58,7 @@ Use `@earendil-works/pi-agent-core` for the browser tool loop and `@earendil-wor
 
 Every tool call records time, turn ID, tool name, arguments with known credentials removed, result status, affected paths, and resulting revisions. A turn starts from the accepted revision. With review on, writes stay staged; acceptance applies the turn only if its starting revision remains current. With review off, tools refresh their view from the workspace before execution, then await persistence of the affected path before reporting success. Accepted workspace operations share one queue protecting complete read-modify-write operations, and each commit compares the current bytes with the tool's starting bytes to detect a concurrent edit. Other files are preserved. Successful automatic edits remain applied if a later part of the turn fails.
 
-The review preference lives in IndexedDB separately from session records. It defaults to on, survives reload, and cannot change during a running turn or pending review. The agent's system instructions describe the selected mode. Both modes retain chat and tool activity; automatic mode does not create a pending diff or block the next prompt.
+The review preference lives in IndexedDB metadata alongside the session and remains outside the exported chat record. It defaults to on, survives reload, and cannot change during a running turn or pending review. The agent's system instructions describe the selected mode. Both modes retain chat and tool activity; automatic mode does not create a pending diff or block the next prompt.
 
 The key is entered by the user and held in session memory by default. It is passed only to the model request path. The studio never intentionally writes it to workspace files, preview messages, telemetry, logs, or ZIPs. Imported `.env` and credential files are rejected; known key values are redacted from chat/tool exports. Users can still type other secrets into project content, so export includes a content review step. If a provider cannot be called from the browser due to its network or authentication rules, the UI reports that provider as unsupported for this deployment; it does not expose a platform key.
 

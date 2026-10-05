@@ -98,3 +98,27 @@ describe('durable workspace transactions', () => {
     expect(toText((await storage.load())!.files.get('a.js')!)).toBe('old-a');
   });
 });
+
+it('opening during interrupted preparation sees the complete active revision', async () => {
+  const hooks: StorageHooks = {};
+  const { name, storage, workspace } = await setup(hooks);
+  let entered!: () => void, release!: () => void;
+  const prepared = new Promise<void>(done => { entered = done; }), gate = new Promise<void>(done => { release = done; });
+  hooks.prepare = async () => { entered(); await gate; };
+  const saving = workspace.replace(new Map([['next.js', toBytes('not active')]]), new Map());
+  await prepared;
+  const reopened = await IndexedWorkspaceStorage.connect(name);
+  const before = await reopened.load();
+  expect([...before!.files.keys()]).toEqual(['a.js', 'b.js']); expect(before?.revision).toBe(0);
+  storage.close(); release();
+  await expect(saving).rejects.toThrow();
+  expect((await reopened.load())?.revision).toBe(0); reopened.close();
+});
+
+it('recovers invalid chat metadata without replacing accepted bytes', async () => {
+  const { name, storage, initial } = await setup();
+  const db = await openDB(name); await db.put('meta', { identity: 'original', session: { version: 2, chats: [null] }, review: true }, 'session');
+  const recovered = (await storage.load())!;
+  expect(recovered.session).toEqual(initial.session); expect(recovered.recovery).toContain('chat metadata');
+  expect(recovered.revision).toBe(0); expect([...recovered.files.keys()]).toEqual(['a.js', 'b.js']); db.close();
+});

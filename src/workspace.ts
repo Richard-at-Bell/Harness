@@ -61,18 +61,8 @@ export async function loadSession(): Promise<SavedSession> {
   return normalizeSession(await db.get('meta', 'session') as SavedSession | LegacySession | undefined);
 }
 
-export async function saveSession(session: SavedSession): Promise<void> {
-  if (session.version !== 2 || !Array.isArray(session.chats) || !session.chats.length || !session.chats.some(chat => chat.id === session.activeChatId)) throw new Error('Invalid chat session');
-  const db = await metaDb();
-  await db.put('meta', session, 'session-v2');
-}
-
 export async function loadReviewChanges(): Promise<boolean> {
   return (await (await metaDb()).get('meta', 'review-agent-changes')) !== false;
-}
-
-export async function saveReviewChanges(enabled: boolean): Promise<void> {
-  await (await metaDb()).put('meta', enabled, 'review-agent-changes');
 }
 
 async function storageRoots(): Promise<{ project: FileSystemDirectoryHandle; fixtures: FileSystemDirectoryHandle }> {
@@ -110,11 +100,12 @@ export function copyFiles(files: FileSnapshot): FileMap {
   return new Map([...files].map(([path, bytes]) => [path, bytes.slice()]));
 }
 export function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
+  if (a === b) return true;
   return a && b ? a.length === b.length && a.every((byte, index) => byte === b[index]) : a === b;
 }
-function publishFiles(files: FileMap, previous: FileSnapshot): FileSnapshot {
-  if (files.size === previous.size && [...files].every(([path, bytes]) => sameBytes(bytes, previous.get(path)))) return previous;
-  return new Map([...files].map(([path, bytes]) => [path, sameBytes(bytes, previous.get(path)) ? previous.get(path)! : bytes.slice()]));
+function publishFiles(files: FileMap, previous: FileSnapshot, acceptedBefore: FileMap): FileSnapshot {
+  if (files.size === previous.size && [...files].every(([path, bytes]) => sameBytes(bytes, acceptedBefore.get(path)))) return previous;
+  return new Map([...files].map(([path, bytes]) => [path, sameBytes(bytes, acceptedBefore.get(path)) ? previous.get(path)! : bytes.slice()]));
 }
 
 // Operations stage detached maps. Only a completed storage transaction changes
@@ -173,7 +164,7 @@ export class Workspace {
 
   transaction<T>(operation: (writer: WorkspaceWriter) => Promise<T>, activation?: Activation): Promise<T> {
     const run = async () => {
-      let files = this.snapshot(), fixtures = this.fixtureSnapshot();
+      let files = new Map(this.acceptedFiles), fixtures = new Map(this.acceptedFixtures);
       const change = async (fixture: boolean, path: string, bytes?: Uint8Array) => {
         if (!(fixture ? validFixturePath(path) : validProjectPath(path))) throw new Error('Invalid path');
         const target = fixture ? fixtures : files;
@@ -194,13 +185,14 @@ export class Workspace {
       const changes = changesBetween(this.acceptedFiles, this.acceptedFixtures, files, fixtures);
       if (changes.length || activation) {
         const committed = await this.storage.commit({ expectedRevision: this.revision, changes, replacement: activation?.replacement });
+        const beforeFiles = this.acceptedFiles, beforeFixtures = this.acceptedFixtures;
         this.acceptedFiles = files; this.acceptedFixtures = fixtures;
         this.currentRevision = committed.revision;
         if (activation) this.currentIdentity = committed.identity;
         const previous = this.publication.getState();
         // Accepted service data is already new when activation observers run.
         // Runtime keeps operation gating in place until all stores are reconciled.
-        this.publication.setState({ files: publishFiles(files, previous.files), fixtures: publishFiles(fixtures, previous.fixtures), revision: this.revision, identity: this.identity });
+        this.publication.setState({ files: publishFiles(files, previous.files, beforeFiles), fixtures: publishFiles(fixtures, previous.fixtures, beforeFixtures), revision: this.revision, identity: this.identity });
         activation?.activate();
       }
       return result;
@@ -234,7 +226,8 @@ export class Stage {
     const paths = new Set([...this.baseline.keys(), ...this.files.keys(), ...this.fixtureBaseline.keys(), ...this.fixtures.keys()]);
     return [...paths].filter(path => {
       const a = this.readBaseline(path), b = this.readCurrent(path);
-      return a && b ? a.length !== b.length || a.some((byte, index) => byte !== b[index]) : a !== b;
+      if (a === b) return true;
+  return a && b ? a.length !== b.length || a.some((byte, index) => byte !== b[index]) : a !== b;
     }).sort();
   }
 }

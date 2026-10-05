@@ -152,7 +152,7 @@ export class StudioRuntime {
     try {
       const prepared = await prepare();
       if (this.stopped || captured !== this.generation) throw new Error('This replacement belongs to an earlier workspace');
-      const replacement = { identity: crypto.randomUUID(), session: structuredClone(prepared.session), selection: prepared.selection };
+      const replacement = { identity: crypto.randomUUID(), session: structuredClone(prepared.session), selection: structuredClone(prepared.selection) };
       this.lifecycle.setState({ phase: 'committing' });
       await this.workspace.transaction(async writer => {
         if (this.stopped || captured !== this.generation) throw new Error('This replacement belongs to an earlier workspace');

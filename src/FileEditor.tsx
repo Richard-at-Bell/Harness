@@ -36,16 +36,24 @@ export const FileEditor = memo(function FileEditor({ path, visible }: { path: st
     editor.current = instance;
     const retain = () => documents.retainModel(instance.getModel());
     retain();
-    subscription.current = instance.onDidChangeModel(retain);
+    const willChange = instance.onWillChangeModel(() => {
+      const model = instance.getModel();
+      if (model) documents.rememberView(model.uri.toString(), instance.saveViewState());
+    });
+    const didChange = instance.onDidChangeModel(() => {
+      retain(); const model = instance.getModel();
+      if (model) instance.restoreViewState(documents.view(model.uri.toString()));
+    });
+    subscription.current = { dispose() { willChange.dispose(); didChange.dispose(); } };
   }
   return <section className="editor-pane" style={{ display: visible ? undefined : 'none' }}>
     <div className="pane-label">
       <span className="pane-icon">{iconFor(path)}</span>{path}
       {draft?.status === 'saving' && <span role="status">Saving…</span>}
-      {draft?.status === 'conflict' && <><span role="alert">Draft conflicts with accepted file</span><button onClick={() => void navigator.clipboard.writeText(draft.text).catch(studio.report)}>Copy draft</button><button onClick={() => documents.reload(path)} title={draft.error}>Reload accepted</button></>}
+      {draft?.status === 'conflict' && <><span role="alert">{draft.requiresReopen ? 'Another tab changed this workspace. Copy drafts before reopening.' : 'Draft conflicts with accepted file'}</span><button onClick={() => void navigator.clipboard.writeText(draft.text).catch(studio.report)}>Copy draft</button><button onClick={() => draft.requiresReopen ? window.location.reload() : documents.reload(path)} title={draft.error}>{draft.requiresReopen ? 'Reopen studio' : 'Reload accepted'}</button></>}
       {draft?.status === 'error' && <button onClick={() => void documents.retry(path)} title={draft.error}>Unsaved · Retry</button>}
       <span className="pane-meta">{path.endsWith('.xlsx') ? 'BINARY' : language(path).toUpperCase()}</span>
     </div>
-    {path.endsWith('.xlsx') ? <div className="binary-note">This spreadsheet is edited in the Data tab.</div> : (activated || visible) && <Editor path={documents.modelPath(path)} keepCurrentModel onMount={onMount} language={language(path)} value={text} theme="vs-dark" onChange={value => void documents.edit(path, value ?? '')} options={{ minimap: { enabled: false }, fontSize: 12, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace', lineHeight: 21, padding: { top: 20 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, renderLineHighlight: 'line', overviewRulerBorder: false }} />}
+    {path.endsWith('.xlsx') ? <div className="binary-note">This spreadsheet is edited in the Data tab.</div> : (activated || visible) && <Editor path={documents.modelPath(path)} keepCurrentModel saveViewState={false} onMount={onMount} language={language(path)} value={text} theme="vs-dark" onChange={value => void documents.edit(path, value ?? '')} options={{ minimap: { enabled: false }, fontSize: 12, fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace', lineHeight: 21, padding: { top: 20 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, renderLineHighlight: 'line', overviewRulerBorder: false }} />}
   </section>;
 });

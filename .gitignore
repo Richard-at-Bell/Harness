@@ -7,3 +7,6 @@ dist/
 *.local
 .DS_Store
 review-artifacts/
+
+playwright-report/
+test-results/

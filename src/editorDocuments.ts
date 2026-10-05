@@ -1,9 +1,10 @@
+import type { editor } from 'monaco-editor';
 import { createStore } from 'zustand/vanilla';
 import { DraftConflict } from './draftConflict';
 import { RevisionConflict } from './workspaceStorage';
 import { sameBytes, toBytes, type FileSnapshot } from './workspace';
 
-export type EditorDraft = { text: string; request: number; status: 'saving' | 'error' | 'conflict'; baseline?: Uint8Array; accepted?: Uint8Array; error?: string };
+export type EditorDraft = { text: string; request: number; status: 'saving' | 'error' | 'conflict'; baseline?: Uint8Array; accepted?: Uint8Array; requiresReopen?: boolean; error?: string };
 type Model = { dispose: () => void };
 
 // One editing session owns recoverable per-path buffers, save acknowledgement,
@@ -15,6 +16,7 @@ export class EditorDocuments {
   private epoch = 0;
   private active = true;
   private readonly models = new Set<Model>();
+  private readonly views = new Map<string, editor.ICodeEditorViewState>();
   private readonly identity = crypto.randomUUID();
   private readonly baselines = new Map<string, Uint8Array | undefined>();
   private readonly queues = new Map<string, Promise<void>>();
@@ -28,6 +30,8 @@ export class EditorDocuments {
   start() { this.active = true; }
   modelPath(path: string) { return `studio://editor/${this.identity}/${path.split('/').map(encodeURIComponent).join('/')}`; }
   retainModel(model: Model | null) { if (this.active && model) this.models.add(model); }
+  rememberView(uri: string, view: editor.ICodeEditorViewState | null) { if (this.active && view) this.views.set(uri, view); }
+  view(uri: string) { return this.views.get(uri) ?? null; }
   private update(path: string, draft: EditorDraft | undefined) {
     this.state.setState(current => { const drafts = new Map(current.drafts); if (draft) drafts.set(path, draft); else drafts.delete(path); return { drafts }; });
   }
@@ -72,7 +76,7 @@ export class EditorDocuments {
         if (!current || current.status === 'conflict') return;
         const conflict = error instanceof DraftConflict || error instanceof RevisionConflict;
         if (conflict || current.request === request) {
-          this.update(path, { ...current, status: conflict ? 'conflict' : 'error', error: String(error instanceof Error ? error.message : error), accepted: this.accepted?.().get(path)?.slice() });
+          this.update(path, { ...current, status: conflict ? 'conflict' : 'error', requiresReopen: error instanceof RevisionConflict, error: String(error instanceof Error ? error.message : error), accepted: this.accepted?.().get(path)?.slice() });
           this.report(error);
         }
       } finally { if (this.inFlight.get(path)?.request === request) this.inFlight.delete(path); }
@@ -84,6 +88,7 @@ export class EditorDocuments {
   }
   retry(path: string) { const draft = this.state.getState().drafts.get(path); return draft?.status === 'error' ? this.edit(path, draft.text) : Promise.resolve(); }
   reload(path: string) {
+    if (this.state.getState().drafts.get(path)?.requiresReopen) return;
     this.discarded.set(path, (this.discarded.get(path) ?? 0) + 1);
     this.baselines.set(path, this.accepted?.().get(path)?.slice());
     this.update(path, undefined);
@@ -93,6 +98,6 @@ export class EditorDocuments {
     this.state.setState({ drafts: new Map() });
     this.baselines.clear(); this.inFlight.clear(); this.queues.clear(); this.discarded.clear();
     for (const model of this.models) model.dispose();
-    this.models.clear();
+    this.models.clear(); this.views.clear();
   }
 }

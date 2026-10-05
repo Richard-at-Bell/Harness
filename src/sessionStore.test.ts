@@ -60,3 +60,16 @@ describe('chat identity and session lifecycle', () => {
     expect(saved).toEqual(['First', 'Second', 'After restart']);
   });
 });
+
+it('captures persistence identity before waiting on an earlier save', async () => {
+  const { a, session } = setup();
+  let identity = 'old', release!: () => void;
+  const gate = new Promise<void>(done => { release = done; });
+  const records: string[] = [];
+  const persistence = persistSession(session, { identity: () => identity, saveSession: async (_record, captured) => { records.push(captured!); if (records.length === 1) await gate; }, saveReviewChanges: async () => {} }, 100_000);
+  session.renameChat(a.id, 'First'); const first = persistence.flush(); await Promise.resolve();
+  session.renameChat(a.id, 'Queued old record'); const second = persistence.flush();
+  identity = 'replacement';
+  session.renameChat(a.id, 'New record'); const third = persistence.stop();
+  release(); await Promise.all([first, second, third]); expect(records).toEqual(['old', 'old', 'replacement']);
+});

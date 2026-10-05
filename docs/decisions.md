@@ -73,3 +73,7 @@ The setting is stored in this browser's IndexedDB, separately from chats and exp
 **Implemented default:** New scalar fields from preview mutations or `write_table` append columns to CSV/XLSX fixtures. Existing columns retain their order. Old rows receive empty cells for added fields, and invalid nested values fail visibly. Agent table writes include the saved column list in their response. This makes adding app features such as priority and due dates possible through the agent workflow. Column rename, removal, and explicit types need a later schema editor.
 
 **Evidence:** Browser testing reproduced priorities returning to Medium after reload because the old serializer discarded fields outside the original four columns. Both CSV and XLSX now have regression checks for new fields surviving later saves.
+
+## Atomic persistence update — 2026-10-05
+
+The proposed OPFS-plus-metadata split above is superseded for accepted studio workspaces by transactional IndexedDB content-addressed bytes and versioned manifests. Replacement session metadata activates in the same transaction. Legacy OPFS roots remain untouched as migration backups. Measurements, verification, recovery and remaining limits are documented in [state ownership](state-ownership.md).
