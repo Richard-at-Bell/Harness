@@ -28,10 +28,25 @@ function inlineCss(files: FileSnapshot, css: string): string {
   });
 }
 
+// srcdoc inherits the Studio's base URL, so native fragment navigation would
+// load the Studio inside the frame. Keep same-page anchors in the project.
+const fragmentNavigation = `window.addEventListener('click', event => {
+  if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  const anchor = event.target?.closest?.('a[href]');
+  const href = anchor?.getAttribute('href');
+  const target = anchor?.getAttribute('target');
+  if (!href?.startsWith('#') || (target && target !== '_self') || anchor.hasAttribute('download')) return;
+  event.preventDefault();
+  let id;
+  try { id = decodeURIComponent(href.slice(1)); } catch { return; }
+  if (!id) { window.scrollTo(0, 0); return; }
+  document.getElementById(id)?.scrollIntoView({ block: 'start' });
+});`;
+
 export async function buildPreview(files: FileSnapshot, fixtures: FileSnapshot, token: string): Promise<string> {
   let html = files.has('index.html') ? toText(files.get('index.html')!) : '<!doctype html><p>No index.html file</p>';
   const seed = await seedScript(fixtures);
-  const support = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'">\n<script>window.__STUDIO_BRIDGE_TOKEN__=${JSON.stringify(token)};${escapeScript(seed)};window.addEventListener('error',event=>parent.postMessage({kind:'preview.error',token:window.__STUDIO_BRIDGE_TOKEN__,message:event.message},'*'));</script>`;
+  const support = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'">\n<script>window.__STUDIO_BRIDGE_TOKEN__=${JSON.stringify(token)};${escapeScript(seed)};window.addEventListener('error',event=>parent.postMessage({kind:'preview.error',token:window.__STUDIO_BRIDGE_TOKEN__,message:event.message},'*'));${fragmentNavigation}</script>`;
   html = html.includes('</head>') ? html.replace('</head>', `${support}</head>`) : support + html;
   html = html.replace(/<link\b([^>]*?)href=["']([^"']+)["']([^>]*)>/gi, (full, before, path, after) => {
     const local = localPath(path);

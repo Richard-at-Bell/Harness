@@ -22,6 +22,12 @@ interface TableFixture {
 }
 ```
 
+## Agent table creation
+
+The agent uses `create_table` to add a Studio fixture and `write_table` to update one. Creation accepts a lowercase table name (1–60 letters, digits, underscores, or hyphens), unique nonempty ordered column names, optional scalar rows, and an optional `csv` or `xlsx` format. CSV is the default. Empty tables retain their declared columns. The current tool accepts at most 1,000 initial rows and refuses an existing table name in either format. It never replaces another table.
+
+A created table is staged when review is on and saved before tool success when review is off. Save failures roll back the staged creation; concurrent creation of the same table in another format is rejected. Managed tables are available through `list_tables`, `read_table`, and the preview bridge. `fixture-seed.js` remains derived output and cannot substitute for a missing Studio table.
+
 ## To-do reference fixture
 
 `fixtures/todos.csv` starts with `id,title,completed,created_at`. `id` is unique and stable; `title` is nonempty text; `completed` is boolean; `created_at` is an ISO 8601 timestamp. The template includes a few sample rows, including a completed task and a title containing a comma to prove CSV quoting works. The UI can regenerate them from a saved seed and fixed reference date.

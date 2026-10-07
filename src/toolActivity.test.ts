@@ -17,4 +17,10 @@ describe('tool activity debug metadata', () => {
     expect(end).toMatchObject({ summary: 'fixtures/todos', input: 'Write 1 row', output: 'Tool failed', status: 'error' });
     expect(JSON.stringify(end)).not.toContain('private');
   });
+
+  it('describes new table creation without storing the supplied rows', () => {
+    const start = startedTool('create-1', 'create_table', { table: 'meals', format: 'xlsx', columns: ['food'], rows: [{ food: 'private meal' }] }, '2026-10-05T00:00:00.000Z');
+    expect(start).toMatchObject({ summary: 'fixtures/meals', input: 'Create XLSX fixture with 1 row' });
+    expect(JSON.stringify(start)).not.toContain('private');
+  });
 });

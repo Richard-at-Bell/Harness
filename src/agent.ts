@@ -10,7 +10,7 @@ import { toText, validFixturePath } from './workspace';
 
 export { DEFAULT_MODEL };
 
-const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables, read_table, and write_table for fixture data. New scalar fields written by the app or write_table automatically become fixture columns; the schema can grow when adding app features. Preserve existing rows and values when extending it. Read relevant files and fixtures before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
+const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The preview runs in a sandboxed iframe without native dialogs. Use accessible in-page dialogs for confirmations and messages; do not use window.alert, window.confirm, or window.prompt. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables and read_table to inspect fixture data, create_table to create new CSV or XLSX tables, and write_table to update existing tables. A missing table needs create_table; do not work around missing fixtures by rewriting data-store.js, creating fixture-seed.js, or putting fixture files in the project. The studio generates fixture-seed.js from managed fixtures for preview and export. New scalar fields written by the app or write_table automatically become fixture columns; the schema can grow when adding app features. Preserve existing rows and values when extending it. Read relevant files and fixtures before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
@@ -48,7 +48,7 @@ export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[
   };
   const write: AgentTool = {
     name: 'write_file', label: 'Write file', description: 'Create or replace a UTF-8 project file. Use for complete new files or substantial rewrites.', parameters: Type.Object({ path: Type.String(), content: Type.String() }), executionMode: 'sequential',
-    async execute(_id, input) { const { path, content } = input as { path: string; content: string }; if (path.endsWith('.xlsx')) throw new Error('Use write_table for XLSX fixtures'); await change(path, () => stage.write(path, content)); return result(`Wrote ${path} (${content.length} characters).`); },
+    async execute(_id, input) { const { path, content } = input as { path: string; content: string }; if (path.startsWith('fixtures/') || path.endsWith('.xlsx')) throw new Error('Use create_table for new Studio fixtures or write_table for existing fixtures'); await change(path, () => stage.write(path, content)); return result(`Wrote ${path} (${content.length} characters).`); },
   };
   const edit: AgentTool = {
     name: 'edit_file', label: 'Edit file', description: 'Replace one exact text occurrence in an existing UTF-8 file.', parameters: Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() }), executionMode: 'sequential',
@@ -101,7 +101,25 @@ export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[
       return result(`Wrote ${clean.length} rows to ${current.path}. Columns: ${saved.columns.join(', ')}.`);
     },
   };
-  return [list, listTables, read, write, edit, remove, readTableTool, writeTableTool].map(tool => ({
+  const createTableTool: AgentTool = {
+    name: 'create_table', label: 'Create fixture table', description: 'Create a new named Studio CSV or XLSX fixture with explicit column names and optional initial rows. Defaults to CSV. Empty tables are supported. Never overwrites an existing table; use write_table to update one.',
+    parameters: Type.Object({ table: Type.String(), columns: Type.Array(Type.String()), rows: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Any()))), format: Type.Optional(Type.Union([Type.Literal('csv'), Type.Literal('xlsx')])) }), executionMode: 'sequential',
+    async execute(_id, input) {
+      const { table, columns, rows = [], format = 'csv' } = input as { table: string; columns: string[]; rows?: Row[]; format?: 'csv' | 'xlsx' };
+      if (!/^[a-z0-9_-]{1,60}$/.test(table)) throw new Error('Table names must use lowercase letters, numbers, underscores, or hyphens (1–60 characters)');
+      if (fixtureIds(stage.fixtures).includes(table)) throw new Error(`Table “${table}” already exists. Read it and use write_table to update it.`);
+      if (format !== 'csv' && format !== 'xlsx') throw new Error('Fixture format must be csv or xlsx');
+      if (!Array.isArray(columns) || !columns.length || columns.some(column => typeof column !== 'string' || !column.trim()) || new Set(columns).size !== columns.length) throw new Error('Fixture columns must have unique, nonempty names');
+      if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Table must have at most 1000 rows');
+      for (const [index, row] of rows.entries()) if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Invalid row ${index + 1}`);
+      const path = `fixtures/${table}.${format}`;
+      const bytes = await tableBytes({ path, columns, rows, format });
+      await change(path, () => stage.writeFixtureBytes(path, bytes));
+      const saved = await readTable(stage.fixtures, table);
+      return result(`Created ${path} with ${saved.rows.length} rows. Columns: ${saved.columns.join(', ')}.`);
+    },
+  };
+  return [list, listTables, read, write, edit, remove, readTableTool, createTableTool, writeTableTool].map(tool => ({
     ...tool,
     async execute(...args: Parameters<AgentTool['execute']>) { await options.beforeTool?.(); return tool.execute(...args); },
   }));

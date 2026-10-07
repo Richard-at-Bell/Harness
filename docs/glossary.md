@@ -23,6 +23,7 @@ Status: **Draft for review**
 | **Preview** | An isolated iframe running a materialized copy of the accepted project in the browser. |
 | **Preview bridge** | A narrow message protocol between the isolated project preview and the studio's fixture service. |
 | **Fixture** | A named CSV/XLSX table owned by Studio data. The preview reads and changes it through the bridge; it is separate from project source files. |
+| **Table creation** | The agent’s `create_table` operation adds a named CSV/XLSX Studio fixture with ordered columns and optional rows. It follows the selected review mode and refuses an existing table identity. |
 | **Chat** | One agent conversation with its own transcript, tool activity, model selection, and local Pi context. Chats share the project and fixtures. |
 | **Normalized table** | The in-memory row and column representation used to read, validate, edit, and serialize either fixture format. |
 | **Generation recipe** | Schema, seed, reference date, and generator version used to reproduce a sample table. |

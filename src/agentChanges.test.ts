@@ -59,4 +59,31 @@ describe('automatic agent edits', () => {
     expect(failed.changes()).toEqual([]);
     expect(workspace.files.has('new.html')).toBe(false);
   });
+
+  it('commits new fixtures automatically and removes a creation when persistence fails', async () => {
+    const workspace = memoryWorkspace();
+    const stage = new Stage(new Map(workspace.files), 0, new Map(workspace.fixtures));
+    const create = createTools(stage, { onChange: async change => { await applyAgentChange(workspace, change); } }).find(tool => tool.name === 'create_table')!;
+    await create.execute('create', { table: 'meals', columns: ['id', 'food'], rows: [{ id: '1', food: 'Sample meal' }] });
+    expect((await readTable(workspace.fixtures, 'meals')).rows[0].food).toBe('Sample meal');
+    expect(workspace.fixtures.has('fixtures/todos.csv')).toBe(true);
+    const failed = new Stage(new Map(workspace.files), 0, new Map(workspace.fixtures));
+    const failingCreate = createTools(failed, { onChange: async () => { throw new Error('Storage full'); } }).find(tool => tool.name === 'create_table')!;
+    await expect(failingCreate.execute('failed', { table: 'settings', columns: ['id'] })).rejects.toThrow('Storage full');
+    expect(failed.changes()).toEqual([]);
+    expect(workspace.fixtures.has('fixtures/settings.csv')).toBe(false);
+  });
+
+  it('rejects a new fixture when another format of that table was created concurrently', async () => {
+    const workspace = memoryWorkspace();
+    const stage = new Stage(new Map(workspace.files), 0, new Map(workspace.fixtures));
+    const tools = createTools(stage, { onChange: async change => {
+      workspace.fixtures.set('fixtures/meals.xlsx', toBytes('concurrent workbook'));
+      await applyAgentChange(workspace, change);
+    } });
+    await expect(tools.find(tool => tool.name === 'create_table')!.execute('create', { table: 'meals', columns: ['id'] })).rejects.toThrow('already exists');
+    expect(stage.changes()).toEqual([]);
+    expect(workspace.fixtures.has('fixtures/meals.csv')).toBe(false);
+    expect(toText(workspace.fixtures.get('fixtures/meals.xlsx')!)).toBe('concurrent workbook');
+  });
 });

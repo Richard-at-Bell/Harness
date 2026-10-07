@@ -24,4 +24,47 @@ describe('agent fixture tools', () => {
     expect((await readTable(stage.fixtures, 'todos')).rows[0]).toMatchObject({ priority: 'high', due_date: '2026-10-02' });
     expect((await readTable(stage.fixtureBaseline, 'todos')).rows[0].title).toBe('Original');
   });
+
+  it.each(['csv', 'xlsx'] as const)('creates a staged %s fixture that can be listed, read, and updated', async format => {
+    const stage = new Stage(new Map(), 1);
+    const tools = createTools(stage);
+    const call = (name: string, input: object) => tools.find(tool => tool.name === name)!.execute(name, input);
+    await call('create_table', { table: 'meals', format, columns: ['id', 'food', 'calories'], rows: [{ id: 'meal-1', food: 'Sample lunch', calories: 420, protein: 25 }] });
+    expect(stage.changes()).toEqual([`fixtures/meals.${format}`]);
+    expect(stage.files.size).toBe(0);
+    expect(stage.fixtureBaseline.size).toBe(0);
+    expect(JSON.stringify(await call('list_tables', {}))).toContain('meals');
+    expect(JSON.stringify(await call('read_table', { table: 'meals' }))).toContain('Sample lunch');
+    const table = await readTable(stage.fixtures, 'meals');
+    expect(table.columns).toEqual(['id', 'food', 'calories', 'protein']);
+    expect(Number(table.rows[0].calories)).toBe(420);
+    await call('write_table', { table: 'meals', rows: [{ ...table.rows[0], calories: 500 }] });
+    expect(Number((await readTable(stage.fixtures, 'meals')).rows[0].calories)).toBe(500);
+  });
+
+  it('creates an empty table with its declared columns', async () => {
+    const stage = new Stage(new Map(), 1);
+    await createTools(stage).find(tool => tool.name === 'create_table')!.execute('create', { table: 'settings', columns: ['id', 'calorie_goal'] });
+    expect(await readTable(stage.fixtures, 'settings')).toMatchObject({ columns: ['id', 'calorie_goal'], rows: [], format: 'csv' });
+  });
+
+  it('rejects duplicate table identities and invalid creation without changing any bytes', async () => {
+    const original = await tableBytes({ path: 'fixtures/meals.csv', format: 'csv', columns: ['id'], rows: [{ id: 'original' }] });
+    const stage = new Stage(new Map(), 1, new Map([['fixtures/meals.csv', original]]));
+    const create = createTools(stage).find(tool => tool.name === 'create_table')!;
+    await expect(create.execute('duplicate', { table: 'meals', format: 'xlsx', columns: ['id'] })).rejects.toThrow('already exists');
+    for (const input of [
+      { table: '../escape', columns: ['id'] },
+      { table: 'empty', columns: [] },
+      { table: 'blank', columns: ['id', ' '] },
+      { table: 'duplicate', columns: ['id', 'id'] },
+      { table: 'bad_format', columns: ['id'], format: 'json' },
+      { table: 'bad_row', columns: ['id'], rows: [null] },
+      { table: 'nested', columns: ['id'], rows: [{ id: { nested: true } }] },
+      { table: 'infinite', columns: ['id'], rows: [{ id: Infinity }] },
+      { table: 'too_many', columns: ['id'], rows: Array.from({ length: 1001 }, () => ({ id: 'x' })) },
+    ]) await expect(create.execute('invalid', input)).rejects.toThrow();
+    expect(stage.changes()).toEqual([]);
+    expect(stage.fixtures.get('fixtures/meals.csv')).toEqual(original);
+  });
 });
