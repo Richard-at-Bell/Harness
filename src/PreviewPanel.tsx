@@ -55,7 +55,7 @@ export const PreviewPanel = memo(function PreviewPanel({ reload }: { reload: num
       const reply = (ok: boolean, value?: unknown, error?: string) => {
         if (isCurrent()) source?.postMessage({ token: captured.token, id: message.id, ok, value, error }, '*');
       };
-      studio.tableRequest(captured.generation, message.table, message.op, message.payload, isCurrent)
+      studio.tableRequest(captured.generation, message.table, message.op, message.payload, isCurrent, message.protocol === 2 ? 2 : 1)
         .then(value => reply(true, value))
         .catch(error => { reply(false, undefined, String(error instanceof Error ? error.message : error)); if (isCurrent()) studio.report(error); });
     }

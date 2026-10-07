@@ -148,3 +148,53 @@ describe('shared typed dataset contract', () => {
     expect((await studio.datasets.read('todos')).rows).toHaveLength(1); studio.stop();
   });
 });
+
+it('declares added fields and values atomically, honors an injected policy, and rejects oversized pages', async () => {
+  const { studio, workspace, storage } = await setup();
+  const initial = await studio.datasets.create({ name: 'Schema', fields: [{ name: 'Code', type: 'text', nullable: false }], rows: [{ Code: '0007' }, { Code: '0007' }] });
+  const next = await studio.datasets.mutate('Schema', { op: 'addFields', fields: [{ name: 'Approved', type: 'boolean', nullable: true }], patches: [{ handle: initial.handles[1], values: { Approved: true } }] }, initial.revision);
+  expect(next.rows.map(r => r.Approved)).toEqual([null,true]); expect(next.definition.fields[0]).toEqual(initial.definition.fields[0]);
+  const before = workspace.store.getState();
+  await expect(workspace.transaction(writer => new DatasetService(writer, { validate: () => { throw new Error('Generic binding policy rejected'); } }).mutate('Schema', { op: 'update', handle: next.handles[0], patch: { Approved: false } }, next.revision))).rejects.toThrow('Generic binding policy');
+  expect(workspace.store.getState()).toBe(before);
+  const large = await studio.datasets.create({ name: 'LongRows', fields: [{ name: 'Text', type: 'text', nullable: false }], rows: [{ Text: 'x'.repeat(210_000) }] });
+  await expect(toolCall(workspace.stage())('read_table', { table: large.definition.id })).rejects.toThrow('response limit');
+  studio.stop(); storage.close();
+});
+
+it('decodes explicit imports consistently, preserves case and identity, and rejects lossy workbook content', async () => {
+  const { studio, workspace, storage } = await setup();
+  const table = await studio.datasets.create({ name: 'JOBDATA', fields: contractFields, rows: [row] });
+  const baseline = workspace.store.getState();
+  const source = workspace.fixtures.get(table.path)!;
+  await studio.importTable(new File([source as BlobPart], 'JOBDATA.csv'));
+  const imported = await studio.datasets.read('JOBDATA'); expect(imported.definition).toEqual(table.definition); expect(imported.rows).toEqual(table.rows);
+  await expect(studio.importTable(new File([toBytes('Wrong,Header\nx,y\n') as BlobPart], 'JOBDATA.csv'))).rejects.toThrow('header');
+  expect((await studio.datasets.read('JOBDATA')).rows).toEqual(table.rows);
+  const ExcelJS = await import('exceljs'), workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('Data');
+  sheet.addRow(['Code']); sheet.addRow([{ formula: '1+1', result: 2 }]);
+  const invalid = new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer);
+  await expect(studio.importTable(new File([invalid as BlobPart], 'FORMULA.xlsx'))).rejects.toThrow('Formula');
+  const other = new Workspace((await import('./workspaceStorage')).memoryStorage({}), new Map());
+  const copy = await other.transaction(writer => new DatasetService(writer).import('JOBDATA', 'fixtures/JOBDATA.csv', source, table.definition));
+  expect(copy.definition.id).toBe(table.definition.id); expect(copy.rows).toEqual(table.rows);
+  expect(baseline.fixtures.get(table.path)).toEqual(source); studio.stop(); storage.close();
+});
+
+it('rolls back the entire automatic agent schema/data group on storage failure and catches a preview superseded during encoding', async () => {
+  const hooks: StorageHooks = {}, { studio, workspace, storage } = await setup(hooks);
+  const table = await studio.datasets.create({ name: 'JOBDATA', fields: contractFields, rows: [row], format: 'xlsx' });
+  const before = workspace.store.getState(); let stageCaptured: ReturnType<Workspace['stage']> | undefined;
+  const turns = createAgentTurns({ workspace, session: studio.session, generation: () => studio.generation, transact: studio.transact, flash: () => {} }, async (_p,_k,_m,stage,_prior,callbacks) => {
+    stageCaptured = stage; await createTools(stage, callbacks).find(t => t.name === 'update_row')!.execute('controlled', { table: 'JOBDATA', revision: table.revision, handle: table.handles[0], patch: { Added: true } });
+    return { text: 'Controlled', messages: [] };
+  });
+  studio.session.setReview(false); hooks.boundary = at => { if (at === 'before-activation') throw new Error('Automatic commit failure'); };
+  await turns.send('grow', 'controlled'); expect(workspace.store.getState()).toBe(before); expect(stageCaptured!.changes()).toEqual([]);
+  expect((await readTable((await storage.load())!.fixtures, 'JOBDATA')).columns).not.toContain('Added');
+  hooks.boundary = undefined; await turns.send('grow', 'controlled'); expect((await studio.datasets.read('JOBDATA')).columns).toContain('Added');
+  const accepted = workspace.store.getState(), revision = (await studio.datasets.read('JOBDATA')).revision;
+  let checks = 0;
+  await expect(studio.tableRequest(0, 'JOBDATA', 'update', { handle: table.handles[0], revision, patch: { Amount: 66 } }, () => ++checks < 3)).rejects.toThrow('Preview was replaced');
+  expect(checks).toBe(3); expect(workspace.store.getState()).toBe(accepted); studio.stop(); storage.close();
+});

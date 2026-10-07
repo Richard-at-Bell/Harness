@@ -7,6 +7,7 @@ import { StudioContext } from '../../src/studioContext';
 import { StudioRuntime } from '../../src/studioRuntime';
 import { Workspace, newStudioChat, toBytes } from '../../src/workspace';
 import { IndexedWorkspaceStorage, type StorageBoundary, type StorageHooks } from '../../src/workspaceStorage';
+import { createTools } from '../../src/agent';
 import { createAgentTurns } from '../../src/agentTurns';
 
 // Only this separate Vite test entry exposes controls. It is excluded from the
@@ -35,6 +36,14 @@ const control = {
       return { text: 'Controlled edit completed', messages: [] };
     });
     await turns.send('Controlled test edit', 'no-live-provider');
+  },
+  async agentRow(table: string, handle: string, revision: number, patch: Record<string, unknown>, review = false) {
+    runtime.session.setReview(review);
+    const turns = createAgentTurns({ workspace, session: runtime.session, generation: () => runtime.generation, transact: runtime.transact, flash: () => {} }, async (_text, _key, _model, stage, _history, callbacks) => {
+      await createTools(stage, callbacks).find(t => t.name === 'update_row')!.execute('controlled', { table, handle, revision, patch });
+      return { text: 'Controlled row edit', messages: [] };
+    });
+    await turns.send('Controlled row edit', 'no-live-provider');
   },
   editorViews() { return monaco.editor.getEditors().map(editor => ({ uri: editor.getModel()?.uri.toString(), position: editor.getPosition() })); },
   modelValues() { return monaco.editor.getModels().map(model => ({ uri: model.uri.toString(), text: model.getValue() })); },

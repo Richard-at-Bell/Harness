@@ -49,3 +49,12 @@ describe('project ZIP', () => {
     expect(imported.chats[0].chat[0].text).toBe('Old chat');
   });
 });
+
+it('migrates a v2 Studio CSV with text codes and case-preserving names', async () => {
+  const writer = new ZipWriter(new BlobWriter('application/zip'));
+  const add = (path: string, text: string) => writer.add(path, new Uint8ArrayReader(toBytes(text)));
+  await add('manifest.json', JSON.stringify({ format: 'browser-project-studio', version: 2, files: ['index.html'], fixtureFiles: ['fixtures/JOBDATA.csv'], sha256: {} }));
+  await add('project/index.html', '<h1>Legacy</h1>'); await add('studio/fixtures/JOBDATA.csv', 'Code,ActiveText\n0007,TRUE\n');
+  const imported = await importZip(await writer.close()), table = await readTable(imported.fixtures, 'JOBDATA');
+  expect(table.definition.name).toBe('JOBDATA'); expect(table.rows).toEqual([{ Code: '0007', ActiveText: 'TRUE' }]); expect(imported.fixtures.has('fixtures/JOBDATA.dataset.json')).toBe(true);
+});

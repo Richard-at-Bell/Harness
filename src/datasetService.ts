@@ -1,4 +1,4 @@
-import { datasetMeaning, growDefinition, mutateDataset, normalizeRows, validateDefinition, type Dataset, type DatasetDefinition, type DatasetPolicy, type Field, type Mutation, type Row } from './datasets';
+import { datasetMeaning, pageDataset, growDefinition, mutateDataset, normalizeRows, validateDefinition, type Dataset, type DatasetDefinition, type DatasetPolicy, type Field, type Mutation, type Row } from './datasets';
 import { fixtureIds, metadataBytes, metadataPath, readTable, tableBytes, tablePath } from './fixtures';
 import { copyFiles, sameBytes, type FileMap, type FileSnapshot } from './workspace';
 export type DatasetWriter = { readonly fixtures: FileSnapshot; writeFixture(path: string, bytes: Uint8Array): Promise<void>; removeFixture(path: string): Promise<void> };
@@ -8,9 +8,7 @@ export class DatasetService {
   constructor(private readonly writer: DatasetWriter, private readonly policy?: DatasetPolicy) {}
   read(name: string) { return readTable(this.writer.fixtures, name); }
   async page(name: string, offset = 0, limit = 100) {
-    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error('Use an offset >= 0 and a page limit from 1 to 1000');
-    const table = await this.read(name), end = Math.min(offset + limit, table.rows.length);
-    return { definition: table.definition, revision: table.revision, columns: table.columns, total: table.rows.length, offset, nextOffset: end < table.rows.length ? end : null, rows: table.rows.slice(offset, end), handles: table.handles.slice(offset, end) };
+    return pageDataset(await this.read(name), offset, limit);
   }
   async create(input: CreateDataset) {
     if (fixtureIds(this.writer.fixtures).includes(input.name)) throw new Error(`Table “${input.name}” already exists`);
@@ -59,7 +57,8 @@ export class DatasetService {
       this.policy?.validate?.(before, incoming);
       for (const f of before.definition.fields) if (f.writable === false) throw new Error(`Field ${f.name} is read-only; use targeted edits`);
     } else {
-      incoming.definition = { ...incoming.definition, id: crypto.randomUUID(), name, provenance: { source: 'imported' } }; incoming.revision = 1;
+      incoming.definition = definition ? { ...definition, name } : { ...incoming.definition, id: crypto.randomUUID(), name, provenance: { source: 'imported' } };
+      if ((await Promise.all(fixtureIds(this.writer.fixtures).map(n => this.read(n)))).some(d => d.definition.id === incoming.definition.id)) throw new Error('Dataset identity already exists'); incoming.revision = 1;
       incoming.path = `fixtures/${incoming.definition.id}.${incoming.format}`;
       this.policy?.validate?.(undefined, incoming);
     }

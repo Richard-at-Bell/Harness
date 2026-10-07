@@ -1,10 +1,11 @@
+import type { DatasetPolicy } from './datasets';
 import { runAgent } from './agent';
 import { applyAgentChange } from './agentChanges';
 import { activeChat, type StudioSession } from './sessionStore';
 import { copyFiles, type Workspace, type WorkspaceWriter } from './workspace';
 
 export type TurnContext = {
-  workspace: Workspace;
+  workspace: Workspace; datasetPolicy?: DatasetPolicy;
   session: StudioSession;
   generation: () => number;
   transact: <T>(generation: number, operation: (writer: WorkspaceWriter) => Promise<T>) => Promise<T>;
@@ -32,7 +33,7 @@ export function createAgentTurns(context: TurnContext, runner = runAgent) {
       try {
         stage = await context.transact(turn.generation, async writer => { check(); return writer.stage(); });
         const outcome = await runner(text, key.trim(), turn.modelId, stage, prior, {
-          signal: controller.signal,
+          signal: controller.signal, datasetPolicy: context.datasetPolicy,
           onText: value => { if (valid()) session.text(turn, value); },
           onTool: line => { if (valid()) session.tool(turn, line); },
           beforeTool: async () => {

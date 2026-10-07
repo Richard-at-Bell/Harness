@@ -94,7 +94,7 @@ function legacyDefinition(name: string, columns: string[], rows: Row[]): Dataset
   });
   const identity = fields.find(f => f.name === 'id');
   const unique = identity && rows.every(r => r.id != null && r.id !== '') && new Set(rows.map(r => r.id)).size === rows.length;
-  if (unique && identity) identity.default = { generate: 'uuid' };
+  if (unique && identity && identity.type === 'text') identity.default = { generate: 'uuid' };
   return { id: `legacy:${name}`, name, fields, rowIdentity: unique ? identity?.id : undefined, schemaRevision: 1, schemaPolicy: 'grow', blanks: 'escaped-null-v1', provenance: { source: 'legacy' } };
 }
 export async function readTable(files: FileSnapshot, id: string): Promise<Dataset> {

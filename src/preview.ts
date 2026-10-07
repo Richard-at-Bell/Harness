@@ -47,7 +47,7 @@ export async function buildPreview(files: FileSnapshot, fixtures: FileSnapshot, 
   let html = files.has('index.html') ? toText(files.get('index.html')!) : '<!doctype html><p>No index.html file</p>';
   const seed = await seedScript(fixtures);
   const support = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'">\n<script>window.__STUDIO_BRIDGE_TOKEN__=${JSON.stringify(token)};${escapeScript(seed)};window.addEventListener('error',event=>parent.postMessage({kind:'preview.error',token:window.__STUDIO_BRIDGE_TOKEN__,message:event.message},'*'));${fragmentNavigation}</script>`;
-  html = html.includes('</head>') ? html.replace('</head>', `${support}</head>`) : support + html;
+  html = /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, opening => opening + support) : support + html;
   html = html.replace(/<link\b([^>]*?)href=["']([^"']+)["']([^>]*)>/gi, (full, before, path, after) => {
     const local = localPath(path);
     if (!/stylesheet/i.test(before + after) || !files.has(local)) return full;

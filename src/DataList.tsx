@@ -12,7 +12,7 @@ export function DataList({ selected, onSelect, onImport }: { selected: string; o
   const tables = [...fixtureIds(fixtures), ...drafts].sort();
   const [path, bytes] = useWorkspace(useShallow(state => { const path = tablePath(state.fixtures, selected); return [path, path ? state.fixtures.get(path) : undefined] as const; }));
   const [count, setCount] = useState<{ bytes: typeof bytes; rows: number } | null>(null);
-  useEffect(() => { let active = true; if (path && bytes) readTable(new Map([[path, bytes]]), selected).then(table => { if (active) setCount({ bytes, rows: table.rows.length }); }).catch(() => { if (active) setCount(null); }); return () => { active = false; }; }, [path, bytes, selected]);
+  useEffect(() => { let active = true; if (path && bytes) readTable(fixtures, selected).then(table => { if (active) setCount({ bytes, rows: table.rows.length }); }).catch(() => { if (active) setCount(null); }); return () => { active = false; }; }, [path, bytes, fixtures, selected]);
   return <div className="data-list">{tables.map(id => {
     const path = tablePath(fixtures, id), removed = !path;
     const format = path?.endsWith('.xlsx') ? 'XLSX' : 'CSV';

@@ -5,7 +5,7 @@ import { fixtureIds, type Row } from './fixtures';
 import { DEFAULT_MODEL } from './models';
 import { finishedTool, startedTool } from './toolActivity';
 import { DatasetService } from './datasetService';
-import { inferField, type Field, type Mutation } from './datasets';
+import { inferField, type DatasetPolicy, type Field, type Mutation } from './datasets';
 import type { AgentChange } from './agentChanges';
 import type { Stage, ToolLine } from './workspace';
 import { copyFiles, sameBytes, toText, validFixturePath } from './workspace';
@@ -16,7 +16,7 @@ const systemPrompt = `You are the coding agent in a browser project studio. The 
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
-type ToolOptions = { beforeTool?: () => Promise<void>; onChange?: (change: AgentChange) => Promise<void> };
+type ToolOptions = { datasetPolicy?: DatasetPolicy; beforeTool?: () => Promise<void>; onChange?: (change: AgentChange) => Promise<void> };
 
 export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[] {
   async function change(path: string, update: () => void) {
@@ -71,7 +71,7 @@ export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[
     name: 'delete_file', label: 'Delete file', description: 'Remove a project file by relative path.', parameters: Type.Object({ path: Type.String() }), executionMode: 'sequential',
     async execute(_id, input) { const { path } = input as { path: string }; if (!stage.read(path)) throw new Error(`File not found: ${path}`); await change(path, () => stage.remove(path)); return result(`Deleted ${path}.`); },
   };
-  const service = new DatasetService({ get fixtures() { return stage.fixtures; }, async writeFixture(path, bytes) { stage.writeFixtureBytes(path, bytes); }, async removeFixture(path) { stage.fixtures.delete(path); } });
+  const service = new DatasetService({ get fixtures() { return stage.fixtures; }, async writeFixture(path, bytes) { stage.writeFixtureBytes(path, bytes); }, async removeFixture(path) { stage.fixtures.delete(path); } }, options.datasetPolicy);
   async function datasetChange(operation: () => Promise<unknown>) {
     const before = copyFiles(stage.fixtures);
     try {

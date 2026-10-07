@@ -46,3 +46,9 @@ describe('live preview', () => {
     expect(click('#meal%20list', { defaultPrevented: true })).not.toHaveBeenCalled();
   });
 });
+
+it('initializes dataset seed and bridge before authored scripts in the head', async () => {
+  const html = await buildPreview(new Map([['index.html', toBytes('<html><head><script src="app.js"></script></head><body></body></html>')], ['app.js', toBytes('window.headAppStarted = true;')]]), new Map(), 'head-token');
+  expect(html.indexOf('__STUDIO_BRIDGE_TOKEN__')).toBeLessThan(html.indexOf('window.headAppStarted = true'));
+  expect(html.indexOf('__DATASET_SEED__')).toBeLessThan(html.indexOf('window.headAppStarted = true'));
+});

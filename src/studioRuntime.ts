@@ -8,7 +8,7 @@ import { persistSession } from './sessionPersistence';
 import { exportZip, importZip } from './export';
 import { fixtureIds, metadataPath, type Table } from './fixtures';
 import { DatasetService, migrateDatasets, type CreateDataset } from './datasetService';
-import type { Dataset, Mutation } from './datasets';
+import type { Dataset, DatasetPolicy, Mutation } from './datasets';
 import { templateFiles, templateFixtures } from './template';
 import { copyFiles, newStudioChat, sameBytes, toBytes, validProjectPath, Workspace, type SavedSession, type WorkspaceWriter } from './workspace';
 
@@ -24,12 +24,12 @@ export class StudioRuntime {
   private persistence?: ReturnType<typeof persistSession>;
   private noticeTimer?: ReturnType<typeof setTimeout>;
 
-  constructor(readonly workspace: Workspace, saved: SavedSession, review: boolean) {
+  constructor(readonly workspace: Workspace, saved: SavedSession, review: boolean, readonly datasetPolicy?: DatasetPolicy) {
     this.session = createSession(saved, review);
     this.lifecycle = createStore<Lifecycle>()(() => ({ generation: 0, phase: 'idle', selection: workspace.opened?.selection ?? { file: workspace.files.has('app.js') ? 'app.js' : [...workspace.files.keys()][0] || 'index.html', tableId: fixtureIds(workspace.fixtures)[0] || 'todos', tab: 'files' } }));
     const { getState, getInitialState, subscribe } = this.lifecycle;
     this.lifecycleStore = { getState, getInitialState, subscribe };
-    this.turns = createAgentTurns({ workspace, session: this.session, generation: () => this.generation, transact: this.transact, flash: this.flash, isAvailable: () => !this.stopped && this.phase !== 'committing' });
+    this.turns = createAgentTurns({ workspace, session: this.session, datasetPolicy, generation: () => this.generation, transact: this.transact, flash: this.flash, isAvailable: () => !this.stopped && this.phase !== 'committing' });
   }
   static async open() {
     const workspace = await Workspace.open();
@@ -88,10 +88,10 @@ export class StudioRuntime {
     });
   }
   readonly datasets = {
-    create: (input: CreateDataset) => this.transact(this.generation, writer => new DatasetService(writer).create(input)),
-    read: (name: string) => this.transact(this.generation, writer => new DatasetService(writer).read(name)),
-    page: (name: string, offset = 0, limit = 100) => this.transact(this.generation, writer => new DatasetService(writer).page(name, offset, limit)),
-    mutate: (name: string, mutation: Mutation, revision: number) => this.transact(this.generation, writer => new DatasetService(writer).mutate(name, mutation, revision)),
+    create: (input: CreateDataset) => this.transact(this.generation, writer => new DatasetService(writer, this.datasetPolicy).create(input)),
+    read: (name: string) => this.transact(this.generation, writer => new DatasetService(writer, this.datasetPolicy).read(name)),
+    page: (name: string, offset = 0, limit = 100) => this.transact(this.generation, writer => new DatasetService(writer, this.datasetPolicy).page(name, offset, limit)),
+    mutate: (name: string, mutation: Mutation, revision: number) => this.transact(this.generation, writer => new DatasetService(writer, this.datasetPolicy).mutate(name, mutation, revision)),
   };
   createTable(name: string) {
     return this.datasets.create({ name, fields: [{ name: 'name', type: 'text', nullable: false }] });
@@ -100,7 +100,7 @@ export class StudioRuntime {
     const draft = structuredClone(table), expected = baseline.slice();
     return this.transact(generation, async writer => {
       if (!sameBytes(writer.fixtures.get(draft.path), expected) || !sameBytes(writer.fixtures.get(metadataPath(draft.path)), draft.metadataBytes)) throw new DraftConflict('table');
-      const service = new DatasetService(writer);
+      const service = new DatasetService(writer, this.datasetPolicy);
       const current = await service.read(draft.definition?.id ?? draft.path.slice(9).replace(/\.(csv|xlsx)$/, ''));
       const next = await service.save({ ...current, ...draft } as Dataset, expected, convert);
       return { table: next, bytes: writer.fixtures.get(next.path)! };
@@ -113,23 +113,24 @@ export class StudioRuntime {
     const name = match[1], path = `fixtures/${name}.${match[2].toLowerCase()}`;
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (bytes.byteLength > 20_000_000) throw new Error('Fixture is larger than 20 MB');
-    await this.transact(generation, writer => new DatasetService(writer).import(name, path, bytes));
+    await this.transact(generation, writer => new DatasetService(writer, this.datasetPolicy).import(name, path, bytes));
     this.flash(`Imported ${file.name}.`); return name;
   }
-  async tableRequest(generation: number, table: string, op: string, payload: any, isCurrent: () => boolean) {
+  async tableRequest(generation: number, table: string, op: string, payload: any, isCurrent: () => boolean, protocol = 1) {
     return this.transact(generation, async writer => {
       if (!isCurrent()) throw new Error('Preview was replaced');
       if (!['list', 'page', 'insert', 'update', 'remove'].includes(op) || typeof table !== 'string' || !table.trim() || table.length > 120) throw new Error('Invalid table request');
       if (JSON.stringify(payload ?? '').length > 200_000) throw new Error('Table request is too large');
-      const service = new DatasetService(writer), current = await service.read(table);
+      const service = new DatasetService(writer, this.datasetPolicy), current = await service.read(table);
       if (!isCurrent()) throw new Error('Preview was replaced');
-      if (op === 'list') return current.rows;
-      if (op === 'page') return service.page(table, payload?.offset, payload?.limit);
+      const result = (value: unknown, revision = current.revision) => protocol === 2 ? { value, revision } : value;
+      if (op === 'list') return result(current.rows);
+      if (op === 'page') return result(await service.page(table, payload?.offset, payload?.limit));
       const revision = payload?.revision ?? current.revision;
       if (op === 'insert') {
         const row = payload?.row ?? payload;
         const next = await service.mutate(table, { op: 'insert', row }, revision, isCurrent);
-        return next.rows.at(-1);
+        return result(next.rows.at(-1), next.revision);
       }
       // Old authored apps address their declared business identity. New apps use
       // opaque handles from page(); no synthetic business column is introduced.
@@ -141,7 +142,7 @@ export class StudioRuntime {
       }
       if (index < 0) throw new Error('Row not found; use a Studio handle or declared row identity');
       const next = await service.mutate(table, op === 'update' ? { op: 'update', handle: current.handles[index], patch: payload.patch } : { op: 'remove', handle: current.handles[index] }, revision, isCurrent);
-      return op === 'update' ? next.rows[index] : current.rows[index];
+      return result(op === 'update' ? next.rows[index] : current.rows[index], next.revision);
     });
   }
   // Preparation permits ordinary work. Commit gates new requests immediately;

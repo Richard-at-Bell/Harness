@@ -210,3 +210,40 @@ test('conversion failure keeps CSV active and a deliberate conversion retry succ
   await expect.poll(() => page.evaluate(() => [...(window as any).__studioTest.runtime.workspace.fixtures.keys()])).not.toContain('fixtures/todos.csv');
   await expect(page.locator('.table-scroll tbody tr')).toHaveCount(1);
 });
+
+test('typed editing, iframe handle mutation, controlled agent conflict and reload preserve the dataset contract', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const identity = await page.evaluate(async () => {
+    const { templateFiles } = await import('/src/template.ts');
+    const c = (window as any).__studioTest, r = c.runtime;
+    const d = await r.datasets.create({ name: 'JOBDATA', fields: [
+      { name: 'Code', type: 'text', nullable: false }, { name: 'Amount', type: 'number', nullable: false },
+      { name: 'Enabled', type: 'boolean', nullable: false }, { name: 'ActiveText', type: 'text', nullable: false },
+      { name: 'Optional', type: 'number', nullable: true }
+    ], rows: [{ Code: '0007', Amount: 12.5, Enabled: true, ActiveText: 'TRUE', Optional: null }, { Code: '0007', Amount: 10, Enabled: false, ActiveText: 'TRUE', Optional: null }] });
+    await r.saveFile('data-store.js', templateFiles['data-store.js']);
+    await r.saveFile('index.html', '<!doctype html><html><head><script src="fixture-seed.js"></script><script src="data-store.js"></script></head><body><button id="update">Update second row</button><output id="result">Ready</output><script>document.getElementById("update").onclick = async () => { try { const p = await StudioData.page("JOBDATA"); await StudioData.update("JOBDATA", p.handles[1], {Amount: 44}, {revision:p.revision}); document.getElementById("result").textContent="Saved"; } catch(e) { document.getElementById("result").textContent=e.message; } };</script></body></html>');
+    r.select({ tableId: 'JOBDATA', tab: 'data' });
+    return { id: d.definition.id, fields: d.definition.fields, handles: d.handles };
+  });
+  const amount = page.getByRole('textbox', { name: 'Amount row 1', exact: true });
+  await expect(amount).toHaveValue('12.5'); await amount.fill('21.75');
+  await page.getByRole('button', { name: 'Save table', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => (await (window as any).__studioTest.runtime.datasets.read('JOBDATA')).rows[0].Amount)).toBe(21.75);
+  await page.getByRole('button', { name: 'Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Split', exact: true }).click();
+  const frame = page.frameLocator('iframe[title="Project preview"]');
+  await frame.getByRole('button', { name: 'Update second row' }).click(); await expect(frame.locator('#result')).toHaveText('Saved');
+  await page.getByRole('button', { name: 'Studio data', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Amount row 2', exact: true })).toHaveValue('44');
+  await amount.fill('33.5');
+  await page.evaluate(async () => { const c = (window as any).__studioTest, p = await c.runtime.datasets.page('JOBDATA'); await c.agentRow('JOBDATA', p.handles[0], p.revision, { Amount: 55, AddedFlag: true }); });
+  await expect(page.getByRole('alert').filter({ hasText: 'Accepted table changed' })).toBeVisible(); await expect(amount).toHaveValue('33.5');
+  await page.getByRole('button', { name: 'Copy draft', exact: true }).click();
+  expect(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())).rows[0].Amount).toBe(33.5);
+  await page.getByRole('button', { name: 'Reload accepted', exact: true }).click(); await expect(amount).toHaveValue('55');
+  await page.reload(); await expect(page.locator('.monaco-editor')).toBeVisible();
+  const saved = await page.evaluate(async () => (window as any).__studioTest.runtime.datasets.read('JOBDATA'));
+  expect(saved.definition.id).toBe(identity.id); expect(saved.definition.fields.slice(0,5)).toEqual(identity.fields); expect(saved.handles).toEqual(identity.handles);
+  expect(saved.rows.map((r: any) => r.Amount)).toEqual([55,44]); expect(saved.rows[0].Code).toBe('0007'); expect(saved.rows[0].ActiveText).toBe('TRUE'); expect(saved.rows[0].Enabled).toBe(true); expect(saved.rows[0].Optional).toBeNull(); expect(saved.rows.map((r: any) => r.AddedFlag)).toEqual([true,null]);
+});

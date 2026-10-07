@@ -66,7 +66,7 @@ export function App() {
     const captured = studio.generation;
     try {
       if (newItem === 'file') { await studio.createFile(name); if (studio.generation !== captured) return; setSelected(name); setTab('files'); setView('code'); }
-      else if (newItem === 'table') { const id = name.toLowerCase(); await studio.createTable(id); if (studio.generation !== captured) return; setSelectedTableId(id); setTab('data'); }
+      else if (newItem === 'table') { const id = name; await studio.createTable(id); if (studio.generation !== captured) return; setSelectedTableId(id); setTab('data'); }
       setNewItem(null); setNewItemName('');
     } catch (error) { studio.report(error); }
   }
@@ -134,7 +134,7 @@ export function App() {
       </div>
     </div>}
 
-    {newItem && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setNewItem(null); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">{newItem === 'file' ? 'PROJECT WORKSPACE' : 'STUDIO DATA'}</span><h2>New {newItem === 'file' ? 'file' : 'fixture'}</h2></div><button onClick={() => setNewItem(null)} title="Close"><X size={20} /></button></div><p>{newItem === 'file' ? 'Enter a project-relative path, such as about.html.' : 'Enter a table name. A CSV with id and name columns will be created.'}</p><label>{newItem === 'file' ? 'File path' : 'Table name'}<input autoFocus value={newItemName} onChange={event => setNewItemName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createNewItem(); }} placeholder={newItem === 'file' ? 'about.html' : 'products'} /></label><div className="modal-actions"><button onClick={() => setNewItem(null)}>Cancel</button><button className="primary-small" onClick={createNewItem}><Plus size={15} /> Create</button></div></div></div>}
+    {newItem && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setNewItem(null); }}><div className="settings-modal"><div className="modal-head"><div><span className="section-kicker">{newItem === 'file' ? 'PROJECT WORKSPACE' : 'STUDIO DATA'}</span><h2>New {newItem === 'file' ? 'file' : 'fixture'}</h2></div><button onClick={() => setNewItem(null)} title="Close"><X size={20} /></button></div><p>{newItem === 'file' ? 'Enter a project-relative path, such as about.html.' : 'Enter a case-preserving dataset name. A CSV with a text name field will be created.'}</p><label>{newItem === 'file' ? 'File path' : 'Table name'}<input autoFocus value={newItemName} onChange={event => setNewItemName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') createNewItem(); }} placeholder={newItem === 'file' ? 'about.html' : 'products'} /></label><div className="modal-actions"><button onClick={() => setNewItem(null)}>Cancel</button><button className="primary-small" onClick={createNewItem}><Plus size={15} /> Create</button></div></div></div>}
 
     <Notice />
   </div>;
