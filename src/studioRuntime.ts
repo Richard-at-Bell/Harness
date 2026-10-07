@@ -6,7 +6,9 @@ import { createAgentTurns } from './agentTurns';
 import { createSession, sessionRecord } from './sessionStore';
 import { persistSession } from './sessionPersistence';
 import { exportZip, importZip } from './export';
-import { fixtureIds, readTable, tableBytes, type Row, type Table } from './fixtures';
+import { fixtureIds, metadataPath, type Table } from './fixtures';
+import { DatasetService, migrateDatasets, type CreateDataset } from './datasetService';
+import type { Dataset, Mutation } from './datasets';
 import { templateFiles, templateFixtures } from './template';
 import { copyFiles, newStudioChat, sameBytes, toBytes, validProjectPath, Workspace, type SavedSession, type WorkspaceWriter } from './workspace';
 
@@ -85,61 +87,61 @@ export class StudioRuntime {
       await writer.write(path, toBytes(''));
     });
   }
-  createTable(id: string) {
-    return this.transact(this.generation, async writer => {
-      if (!/^[a-z0-9_-]{1,60}$/.test(id) || fixtureIds(writer.fixtures).includes(id)) throw new Error('Choose a new table name using letters, numbers, hyphens, or underscores.');
-      await writer.writeFixture(`fixtures/${id}.csv`, await tableBytes({ path: `fixtures/${id}.csv`, format: 'csv', columns: ['id', 'name'], rows: [] }));
-    });
+  readonly datasets = {
+    create: (input: CreateDataset) => this.transact(this.generation, writer => new DatasetService(writer).create(input)),
+    read: (name: string) => this.transact(this.generation, writer => new DatasetService(writer).read(name)),
+    page: (name: string, offset = 0, limit = 100) => this.transact(this.generation, writer => new DatasetService(writer).page(name, offset, limit)),
+    mutate: (name: string, mutation: Mutation, revision: number) => this.transact(this.generation, writer => new DatasetService(writer).mutate(name, mutation, revision)),
+  };
+  createTable(name: string) {
+    return this.datasets.create({ name, fields: [{ name: 'name', type: 'text', nullable: false }] });
   }
   saveTable(table: Table, baseline: Uint8Array, generation: number, convert = false) {
     const draft = structuredClone(table), expected = baseline.slice();
     return this.transact(generation, async writer => {
-      if (!sameBytes(writer.fixtures.get(draft.path), expected)) throw new DraftConflict('table');
-      const next: Table = convert ? { ...draft, path: draft.path.replace(/\.(csv|xlsx)$/, draft.format === 'csv' ? '.xlsx' : '.csv'), format: draft.format === 'csv' ? 'xlsx' : 'csv' } : draft;
-      if (convert && writer.fixtures.has(next.path)) throw new DraftConflict('destination table');
-      const bytes = await tableBytes(next);
-      await writer.writeFixture(next.path, bytes);
-      if (convert) await writer.removeFixture(draft.path);
-      return { table: next, bytes };
+      if (!sameBytes(writer.fixtures.get(draft.path), expected) || !sameBytes(writer.fixtures.get(metadataPath(draft.path)), draft.metadataBytes)) throw new DraftConflict('table');
+      const service = new DatasetService(writer);
+      const current = await service.read(draft.definition?.id ?? draft.path.slice(9).replace(/\.(csv|xlsx)$/, ''));
+      const next = await service.save({ ...current, ...draft } as Dataset, expected, convert);
+      return { table: next, bytes: writer.fixtures.get(next.path)! };
     });
   }
   async importTable(file: File) {
     const generation = this.generation;
     const match = /^([a-z0-9_-]{1,60})\.(csv|xlsx)$/i.exec(file.name);
     if (!match) throw new Error('Use a CSV or XLSX filename with letters, numbers, hyphens, or underscores.');
-    const id = match[1].toLowerCase(), path = `fixtures/${id}.${match[2].toLowerCase()}`;
+    const name = match[1], path = `fixtures/${name}.${match[2].toLowerCase()}`;
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (bytes.byteLength > 20_000_000) throw new Error('Fixture is larger than 20 MB');
-    await readTable(new Map([[path, bytes]]), id);
-    await this.transact(generation, async writer => {
-      await writer.writeFixture(path, bytes);
-      for (const existing of [`fixtures/${id}.csv`, `fixtures/${id}.xlsx`]) if (existing !== path) await writer.removeFixture(existing);
-    });
-    this.flash(`Imported ${id}.${match[2].toLowerCase()}.`); return id;
+    await this.transact(generation, writer => new DatasetService(writer).import(name, path, bytes));
+    this.flash(`Imported ${file.name}.`); return name;
   }
   async tableRequest(generation: number, table: string, op: string, payload: any, isCurrent: () => boolean) {
     return this.transact(generation, async writer => {
       if (!isCurrent()) throw new Error('Preview was replaced');
-      if (!['list', 'insert', 'update', 'remove'].includes(op) || !/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table request');
+      if (!['list', 'page', 'insert', 'update', 'remove'].includes(op) || typeof table !== 'string' || !table.trim() || table.length > 120) throw new Error('Invalid table request');
       if (JSON.stringify(payload ?? '').length > 200_000) throw new Error('Table request is too large');
-      const current = await readTable(writer.fixtures, table);
+      const service = new DatasetService(writer), current = await service.read(table);
       if (!isCurrent()) throw new Error('Preview was replaced');
       if (op === 'list') return current.rows;
-      let value: Row | undefined;
+      if (op === 'page') return service.page(table, payload?.offset, payload?.limit);
+      const revision = payload?.revision ?? current.revision;
       if (op === 'insert') {
-        if (current.rows.length >= 10_000) throw new Error('Table is full');
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid row');
-        value = { ...payload, id: payload.id || crypto.randomUUID() }; current.rows.push(value!);
-      } else {
-        const index = current.rows.findIndex(row => String(row.id) === String(payload?.id));
-        if (index < 0) throw new Error('Row not found');
-        if (op === 'update') { current.rows[index] = { ...current.rows[index], ...payload.patch }; value = current.rows[index]; }
-        if (op === 'remove') value = current.rows.splice(index, 1)[0];
+        const row = payload?.row ?? payload;
+        const next = await service.mutate(table, { op: 'insert', row }, revision, isCurrent);
+        return next.rows.at(-1);
       }
-      const bytes = await tableBytes(current);
-      if (!isCurrent()) throw new Error('Preview was replaced');
-      await writer.writeFixture(current.path, bytes);
-      return value;
+      // Old authored apps address their declared business identity. New apps use
+      // opaque handles from page(); no synthetic business column is introduced.
+      const target = payload?.handle ?? payload?.id;
+      let index = current.handles.indexOf(target);
+      if (index < 0 && current.definition.rowIdentity) {
+        const field = current.definition.fields.find(f => f.id === current.definition.rowIdentity)!;
+        index = current.rows.findIndex(row => String(row[field.name]) === String(target));
+      }
+      if (index < 0) throw new Error('Row not found; use a Studio handle or declared row identity');
+      const next = await service.mutate(table, op === 'update' ? { op: 'update', handle: current.handles[index], patch: payload.patch } : { op: 'remove', handle: current.handles[index] }, revision, isCurrent);
+      return op === 'update' ? next.rows[index] : current.rows[index];
     });
   }
   // Preparation permits ordinary work. Commit gates new requests immediately;
@@ -156,7 +158,7 @@ export class StudioRuntime {
       this.lifecycle.setState({ phase: 'committing' });
       await this.workspace.transaction(async writer => {
         if (this.stopped || captured !== this.generation) throw new Error('This replacement belongs to an earlier workspace');
-        await writer.replace(prepared.files, prepared.fixtures);
+        await writer.replace(prepared.files, await migrateDatasets(prepared.fixtures));
       }, { replacement, activate: () => {
         if (this.stopped) return;
         this.turns.cancel();

@@ -32,7 +32,7 @@ export const toText = (bytes: Uint8Array) => decoder.decode(bytes);
 export function validPath(path: string): boolean {
   return Boolean(path) && !path.startsWith('/') && !path.includes('\\') && !path.split('/').some(part => !part || part === '.' || part === '..') && !/(^|\/)\.env(?:\.|$)/i.test(path) && path.length < 240;
 }
-export function validFixturePath(path: string): boolean { return /^fixtures\/[a-z0-9_-]{1,60}\.(csv|xlsx)$/.test(path); }
+export function validFixturePath(path: string): boolean { return /^fixtures\/[a-zA-Z0-9_-]{1,60}\.(csv|xlsx|dataset\.json)$/.test(path); }
 export function validProjectPath(path: string): boolean { return validPath(path) && !path.startsWith('fixtures/') && !path.startsWith('studio/'); }
 
 async function metaDb(): Promise<IDBPDatabase> {
@@ -143,12 +143,18 @@ export class Workspace {
         if (!fixtures.size) for (const [path, text] of Object.entries(templateFixtures)) fixtures.set(path, toBytes(text));
       }
       const [session, review] = await Promise.all([loadSession(), loadReviewChanges()]);
-      try { await storage.initialize({ files, fixtures, session, review, identity: crypto.randomUUID(), selection: { file: files.has('app.js') ? 'app.js' : [...files.keys()][0], tableId: 'todos', tab: 'files' } }); }
+      const { migrateDatasets } = await import('./datasetService');
+      const migratedFixtures = await migrateDatasets(fixtures);
+      try { await storage.initialize({ files, fixtures: migratedFixtures, session, review, identity: crypto.randomUUID(), selection: { file: files.has('app.js') ? 'app.js' : [...files.keys()][0], tableId: 'todos', tab: 'files' } }); }
       catch (error) { if (!(error instanceof RevisionConflict)) throw error; }
       committed = await storage.load();
     }
     if (!committed) throw new Error('Workspace activation failed');
-    return new Workspace(storage, committed.files, committed.fixtures, committed);
+    const workspace = new Workspace(storage, committed.files, committed.fixtures, committed);
+    const { migrateDatasets } = await import('./datasetService');
+    const fixtures = await migrateDatasets(committed.fixtures);
+    await workspace.transaction(writer => writer.replace(committed!.files, fixtures));
+    return workspace;
   }
   get files(): FileMap { return this.snapshot(); }
   get fixtures(): FileMap { return this.fixtureSnapshot(); }

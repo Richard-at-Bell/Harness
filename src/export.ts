@@ -1,9 +1,10 @@
 import { BlobReader, BlobWriter, Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from '@zip.js/zip.js';
 import type { ChatLine, FileMap, StudioChat, ToolLine } from './workspace';
 import { newStudioChat, titleForChat, toBytes, toText, validFixturePath, validPath, validProjectPath } from './workspace';
+import { migrateDatasets } from './datasetService';
 import { seedScript } from './fixtures';
 
-type ExportManifest = { format: 'browser-project-studio'; version: 1 | 2; exportedAt: string; entry: string; files: string[]; fixtureFiles?: string[]; activeChatId?: string; sha256: Record<string, string> };
+type ExportManifest = { format: 'browser-project-studio'; version: 1 | 2 | 3; datasetMetadataVersion?: 1; exportedAt: string; entry: string; files: string[]; fixtureFiles?: string[]; activeChatId?: string; sha256: Record<string, string> };
 type ChatMeta = Pick<StudioChat, 'id' | 'title' | 'createdAt' | 'updatedAt' | 'modelId'>;
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -12,6 +13,7 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 }
 
 export async function exportZip(files: FileMap, fixtures: FileMap, chats: StudioChat[], activeChatId: string): Promise<Blob> {
+  fixtures = await migrateDatasets(fixtures);
   const archive = new ZipWriter(new BlobWriter('application/zip'));
   const paths = [...files.keys()].filter(path => path !== 'fixture-seed.js' && validProjectPath(path)).sort();
   const fixturePaths = [...fixtures.keys()].filter(validFixturePath).sort();
@@ -26,7 +28,7 @@ export async function exportZip(files: FileMap, fixtures: FileMap, chats: Studio
   await add('studio/chats.json', toBytes(JSON.stringify(metadata, null, 2)));
   await add('studio/chat.jsonl', toBytes(chats.flatMap(session => session.chat.map(line => JSON.stringify({ chatId: session.id, ...line }))).join('\n') + '\n'));
   await add('studio/tool-events.jsonl', toBytes(chats.flatMap(session => session.tools.map(line => JSON.stringify({ chatId: session.id, ...line }))).join('\n') + '\n'));
-  const manifest: ExportManifest = { format: 'browser-project-studio', version: 2, exportedAt: new Date().toISOString(), entry: 'project/index.html', files: [...new Set([...paths, 'fixture-seed.js', 'README.md'])], fixtureFiles: fixturePaths, activeChatId, sha256: hashes };
+  const manifest: ExportManifest = { format: 'browser-project-studio', version: 3, datasetMetadataVersion: 1, exportedAt: new Date().toISOString(), entry: 'project/index.html', files: [...new Set([...paths, 'fixture-seed.js', 'README.md'])], fixtureFiles: fixturePaths, activeChatId, sha256: hashes };
   await archive.add('manifest.json', new Uint8ArrayReader(toBytes(JSON.stringify(manifest, null, 2))));
   return archive.close();
 }
@@ -54,14 +56,22 @@ export async function importZip(blob: Blob): Promise<{ files: FileMap; fixtures:
   const readLines = <T>(path: string): T[] => toText(unpacked.get(path) || new Uint8Array()).split('\n').filter(Boolean).map(line => JSON.parse(line) as T);
   if (unpacked.has('manifest.json')) {
     const manifest = JSON.parse(toText(unpacked.get('manifest.json')!)) as ExportManifest;
-    if (manifest.format !== 'browser-project-studio' || ![1, 2].includes(manifest.version)) throw new Error('Unsupported studio ZIP version');
+    if (manifest.format !== 'browser-project-studio' || ![1, 2, 3].includes(manifest.version)) throw new Error('Unsupported studio ZIP version');
     version = manifest.version;
+    if (version === 3) {
+      if (manifest.datasetMetadataVersion !== 1 || !Array.isArray(manifest.fixtureFiles)) throw new Error('Unsupported dataset metadata contract');
+      const actual = [...unpacked.keys()].filter(p => p.startsWith('studio/fixtures/')).sort();
+      const declared = manifest.fixtureFiles!.map(p => `studio/${p}`).sort();
+      if (JSON.stringify(actual) !== JSON.stringify(declared) || manifest.fixtureFiles!.some(p => !validFixturePath(p))) throw new Error('Dataset manifest does not match fixture contents');
+      for (const p of declared) if (!manifest.sha256?.[p]) throw new Error(`Missing integrity hash: ${p}`);
+      for (const p of manifest.fixtureFiles!.filter(p => /\.(csv|xlsx)$/.test(p))) if (!manifest.fixtureFiles!.includes(p.replace(/\.(csv|xlsx)$/, '.dataset.json'))) throw new Error('Dataset metadata missing');
+    }
     if (manifest.sha256) for (const [path, expected] of Object.entries(manifest.sha256)) {
       const bytes = unpacked.get(path);
       if (!bytes || await sha256(bytes) !== expected) throw new Error(`ZIP integrity check failed: ${path}`);
     }
     prefix = 'project/';
-    if (version === 2) {
+    if (version >= 2) {
       const metadata = JSON.parse(toText(unpacked.get('studio/chats.json') || toBytes('[]'))) as ChatMeta[];
       if (!Array.isArray(metadata)) throw new Error('Invalid chat metadata');
       chats = metadata.map(item => ({ ...item, chat: [], tools: [], agentMessages: [] }));
@@ -84,7 +94,7 @@ export async function importZip(blob: Blob): Promise<{ files: FileMap; fixtures:
   const files: FileMap = new Map();
   const fixtures: FileMap = new Map();
   for (const [path, bytes] of unpacked) {
-    if (version === 2 && path.startsWith('studio/fixtures/')) {
+    if (version >= 2 && path.startsWith('studio/fixtures/')) {
       const relative = path.slice('studio/'.length);
       if (validFixturePath(relative)) fixtures.set(relative, bytes);
     }
@@ -97,7 +107,7 @@ export async function importZip(blob: Blob): Promise<{ files: FileMap; fixtures:
   if (!files.has('index.html')) throw new Error('ZIP has no index.html entry point');
   if (!chats.length) chats = [newStudioChat()];
   if (!chats.some(chat => chat.id === activeChatId)) activeChatId = chats[0].id;
-  return { files, fixtures, chats, activeChatId };
+  return { files, fixtures: await migrateDatasets(fixtures), chats, activeChatId };
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

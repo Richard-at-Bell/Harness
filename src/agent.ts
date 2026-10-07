@@ -1,16 +1,18 @@
 import { Agent, type AgentMessage, type AgentTool } from '@earendil-works/pi-agent-core';
 import { createModels, Type, contentText } from '@earendil-works/pi-ai';
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
-import { fixtureIds, readTable, tableBytes, type Row } from './fixtures';
+import { fixtureIds, type Row } from './fixtures';
 import { DEFAULT_MODEL } from './models';
 import { finishedTool, startedTool } from './toolActivity';
+import { DatasetService } from './datasetService';
+import { inferField, type Field, type Mutation } from './datasets';
 import type { AgentChange } from './agentChanges';
 import type { Stage, ToolLine } from './workspace';
-import { toText, validFixturePath } from './workspace';
+import { copyFiles, sameBytes, toText, validFixturePath } from './workspace';
 
 export { DEFAULT_MODEL };
 
-const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The preview runs in a sandboxed iframe without native dialogs. Use accessible in-page dialogs for confirmations and messages; do not use window.alert, window.confirm, or window.prompt. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables and read_table to inspect fixture data, create_table to create new CSV or XLSX tables, and write_table to update existing tables. A missing table needs create_table; do not work around missing fixtures by rewriting data-store.js, creating fixture-seed.js, or putting fixture files in the project. The studio generates fixture-seed.js from managed fixtures for preview and export. New scalar fields written by the app or write_table automatically become fixture columns; the schema can grow when adding app features. Preserve existing rows and values when extending it. Read relevant files and fixtures before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
+const systemPrompt = `You are the coding agent in a browser project studio. The user's project is plain HTML, CSS, and JavaScript. You can inspect and change project files with the supplied tools. There is no terminal, package manager, server, or TypeScript in the user project. Keep changes small and runnable as a static website. The preview runs in a sandboxed iframe without native dialogs. Use accessible in-page dialogs for confirmations and messages; do not use window.alert, window.confirm, or window.prompt. The project includes a data-store.js adapter exposing window.StudioData.list/insert/update/remove/subscribe for CSV or XLSX fixtures. Fixtures are managed by the studio, separate from project source files. Preserve the adapter unless the user explicitly asks to change data behavior. Use list_tables and paginated read_table to inspect fixture definitions, revisions and row handles. Use create_table with typed fields, insert_row/update_row/remove_row with an expected revision for targeted changes. write_table requires replaceAll=true and replaces the complete dataset, so never use it for a page edit. A missing table needs create_table; do not work around missing fixtures by rewriting data-store.js, creating fixture-seed.js, or putting fixture files in the project. The studio generates fixture-seed.js from managed fixtures for preview and export. Generic grow schemas add new scalar fields and values atomically; fixed schemas reject additions. Respect types, read-only fields and declared identity. Preserve existing rows and values when extending it. Read relevant files and fixtures before editing. Never claim to have run code or tested a preview. After edits, briefly summarize what changed and any limits. Do not request or print credentials.`;
 
 function result(text: string) { return { content: [{ type: 'text' as const, text }], details: {} }; }
 
@@ -69,57 +71,60 @@ export function createTools(stage: Stage, options: ToolOptions = {}): AgentTool[
     name: 'delete_file', label: 'Delete file', description: 'Remove a project file by relative path.', parameters: Type.Object({ path: Type.String() }), executionMode: 'sequential',
     async execute(_id, input) { const { path } = input as { path: string }; if (!stage.read(path)) throw new Error(`File not found: ${path}`); await change(path, () => stage.remove(path)); return result(`Deleted ${path}.`); },
   };
+  const service = new DatasetService({ get fixtures() { return stage.fixtures; }, async writeFixture(path, bytes) { stage.writeFixtureBytes(path, bytes); }, async removeFixture(path) { stage.fixtures.delete(path); } });
+  async function datasetChange(operation: () => Promise<unknown>) {
+    const before = copyFiles(stage.fixtures);
+    try {
+      const value = await operation();
+      const paths = [...new Set([...before.keys(), ...stage.fixtures.keys()])].filter(p => !sameBytes(before.get(p), stage.fixtures.get(p)));
+      if (paths.length) {
+        const changes = paths.map(path => ({ path, before: before.get(path), after: stage.fixtures.get(path) }));
+        await options.onChange?.({ ...changes[0], related: changes.slice(1) });
+      }
+      return value;
+    } catch (error) { stage.fixtures = before; throw error; }
+  }
   const readTableTool: AgentTool = {
-    name: 'read_table', label: 'Read fixture table', description: 'Read a CSV or XLSX fixture by table name. Returns columns and rows as JSON.', parameters: Type.Object({ table: Type.String() }),
-    async execute(_id, input) {
-      const { table } = input as { table: string };
-      if (!/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table name');
-      const value = await readTable(stage.fixtures, table);
-      if (value.rows.length > 1000) throw new Error('Table is too large for this tool');
-      return result(JSON.stringify({ columns: value.columns, rows: value.rows }));
-    },
+    name: 'read_table', label: 'Read fixture page', description: 'Read a bounded page of typed rows, Studio handles, definition and revision. Default 100 rows; maximum 1000 per page. Follow nextOffset to continue.',
+    parameters: Type.Object({ table: Type.String(), offset: Type.Optional(Type.Number()), limit: Type.Optional(Type.Number()) }),
+    async execute(_id, input) { const { table, offset, limit } = input as { table: string; offset?: number; limit?: number }; return result(JSON.stringify(await service.page(table, offset, limit))); },
   };
   const writeTableTool: AgentTool = {
-    name: 'write_table', label: 'Write fixture table', description: 'Replace rows of an existing CSV or XLSX fixture. Existing columns are preserved; new scalar fields in rows add columns automatically. Read it first and include all rows to keep them.', parameters: Type.Object({ table: Type.String(), rows: Type.Array(Type.Record(Type.String(), Type.Any())) }), executionMode: 'sequential',
+    name: 'write_table', label: 'Replace complete dataset', description: 'Explicit complete-row replacement. Requires replaceAll=true and the revision from read_table. Do not use for page edits; use targeted row tools to preserve unread rows.',
+    parameters: Type.Object({ table: Type.String(), rows: Type.Array(Type.Record(Type.String(), Type.Any())), replaceAll: Type.Boolean(), revision: Type.Number() }), executionMode: 'sequential',
     async execute(_id, input) {
-      const { table, rows } = input as { table: string; rows: unknown[] };
-      if (!/^[a-z0-9_-]{1,60}$/i.test(table)) throw new Error('Invalid table name');
-      if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Table must have at most 1000 rows');
-      const current = await readTable(stage.fixtures, table);
-      const clean: Row[] = rows.map((item, index) => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`Invalid row ${index + 1}`);
-        const raw = item as Record<string, unknown>;
-        return Object.fromEntries([...new Set([...current.columns, ...Object.keys(raw)])].map(column => {
-          const value = raw[column];
-          if (value != null && !['string', 'number', 'boolean'].includes(typeof value)) throw new Error(`Invalid ${column} value in row ${index + 1}`);
-          return [column, (value ?? null) as Row[string]];
-        }));
-      });
-      const bytes = await tableBytes({ ...current, rows: clean });
-      await change(current.path, () => stage.writeFixtureBytes(current.path, bytes));
-      const saved = await readTable(stage.fixtures, table);
-      return result(`Wrote ${clean.length} rows to ${current.path}. Columns: ${saved.columns.join(', ')}.`);
+      const { table, rows, replaceAll, revision } = input as { table: string; rows: Row[]; replaceAll: boolean; revision: number };
+      if (replaceAll !== true) throw new Error('Complete replacement requires replaceAll=true; use targeted row tools for pages');
+      if (!Array.isArray(rows) || rows.length > 100_000) throw new Error('Invalid or oversized rows');
+      await datasetChange(() => service.mutate(table, { op: 'replace', rows }, revision));
+      return result(`Wrote ${rows.length} rows to ${table}.`);
     },
   };
   const createTableTool: AgentTool = {
-    name: 'create_table', label: 'Create fixture table', description: 'Create a new named Studio CSV or XLSX fixture with explicit column names and optional initial rows. Defaults to CSV. Empty tables are supported. Never overwrites an existing table; use write_table to update one.',
-    parameters: Type.Object({ table: Type.String(), columns: Type.Array(Type.String()), rows: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Any()))), format: Type.Optional(Type.Union([Type.Literal('csv'), Type.Literal('xlsx')])) }), executionMode: 'sequential',
+    name: 'create_table', label: 'Create fixture table', description: 'Create a case-preserving dataset with ordered typed fields, optional rows, schemaPolicy and rowIdentity. Legacy columns shorthand infers only native value types. Never overwrites an existing name.',
+    parameters: Type.Object({ table: Type.String(), columns: Type.Optional(Type.Array(Type.String())), fields: Type.Optional(Type.Array(Type.Any())), rows: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Any()))), format: Type.Optional(Type.Union([Type.Literal('csv'), Type.Literal('xlsx')])), schemaPolicy: Type.Optional(Type.Union([Type.Literal('grow'), Type.Literal('fixed')])), rowIdentity: Type.Optional(Type.String()) }), executionMode: 'sequential',
     async execute(_id, input) {
-      const { table, columns, rows = [], format = 'csv' } = input as { table: string; columns: string[]; rows?: Row[]; format?: 'csv' | 'xlsx' };
-      if (!/^[a-z0-9_-]{1,60}$/.test(table)) throw new Error('Table names must use lowercase letters, numbers, underscores, or hyphens (1–60 characters)');
-      if (fixtureIds(stage.fixtures).includes(table)) throw new Error(`Table “${table}” already exists. Read it and use write_table to update it.`);
-      if (format !== 'csv' && format !== 'xlsx') throw new Error('Fixture format must be csv or xlsx');
-      if (!Array.isArray(columns) || !columns.length || columns.some(column => typeof column !== 'string' || !column.trim()) || new Set(columns).size !== columns.length) throw new Error('Fixture columns must have unique, nonempty names');
-      if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Table must have at most 1000 rows');
-      for (const [index, row] of rows.entries()) if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Invalid row ${index + 1}`);
-      const path = `fixtures/${table}.${format}`;
-      const bytes = await tableBytes({ path, columns, rows, format });
-      await change(path, () => stage.writeFixtureBytes(path, bytes));
-      const saved = await readTable(stage.fixtures, table);
-      return result(`Created ${path} with ${saved.rows.length} rows. Columns: ${saved.columns.join(', ')}.`);
+      const { table, columns, fields, rows = [], format = 'csv', schemaPolicy, rowIdentity } = input as { table: string; columns?: string[]; fields?: Omit<Field, 'id'>[]; rows?: Row[]; format?: 'csv' | 'xlsx'; schemaPolicy?: 'grow' | 'fixed'; rowIdentity?: string };
+      if (!Array.isArray(rows) || rows.length > 1000 || rows.some(r => !r || typeof r !== 'object' || Array.isArray(r))) throw new Error('Create at most 1000 valid initial rows; add more with targeted tools');
+      if (!fields && (!Array.isArray(columns) || !columns.length || columns.some(c => typeof c !== 'string' || !c.trim()) || new Set(columns).size !== columns.length)) throw new Error('Fixture columns must have unique, nonempty names');
+      const declared = fields ?? columns!.map(name => ({ ...inferField(name, rows.map(r => r[name])), ...(name === 'id' ? { type: 'text' as const, nullable: false, default: { generate: 'uuid' as const } } : {}) }));
+      const created = await datasetChange(() => service.create({ name: table, fields: declared, rows, format, schemaPolicy, rowIdentity: rowIdentity ?? (!fields && columns?.includes('id') ? 'id' : undefined) }));
+      const dataset = created as Awaited<ReturnType<typeof service.read>>;
+      return result(JSON.stringify({ definition: dataset.definition, revision: dataset.revision, total: dataset.rows.length, format: dataset.format }));
     },
   };
-  return [list, listTables, read, write, edit, remove, readTableTool, createTableTool, writeTableTool].map(tool => ({
+  const rowTools: AgentTool[] = (['insert', 'update', 'remove'] as const).map(op => ({
+    name: `${op}_row`, label: `${op} row`, description: `${op} a single row using its Studio handle and expected dataset revision. Preserves all other rows.`,
+    parameters: Type.Object({ table: Type.String(), revision: Type.Number(), ...(op === 'insert' ? { row: Type.Record(Type.String(), Type.Any()) } : { handle: Type.String(), ...(op === 'update' ? { patch: Type.Record(Type.String(), Type.Any()) } : {}) }) }), executionMode: 'sequential',
+    async execute(_id, input) {
+      const args = input as { table: string; revision: number; handle: string; row: Row; patch: Row };
+      const mutation: Mutation = op === 'insert' ? { op, row: args.row } : op === 'update' ? { op, handle: args.handle, patch: args.patch } : { op, handle: args.handle };
+      const saved = await datasetChange(() => service.mutate(args.table, mutation, args.revision));
+      const dataset = saved as Awaited<ReturnType<typeof service.read>>;
+      return result(JSON.stringify({ revision: dataset.revision, definition: dataset.definition, handle: op === 'insert' ? dataset.handles.at(-1) : args.handle }));
+    },
+  }));
+  return [list, listTables, read, write, edit, remove, readTableTool, createTableTool, writeTableTool, ...rowTools].map(tool => ({
     ...tool,
     async execute(...args: Parameters<AgentTool['execute']>) { await options.beforeTool?.(); return tool.execute(...args); },
   }));

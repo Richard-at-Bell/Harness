@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BlobReader, BlobWriter, Uint8ArrayReader, ZipReader, ZipWriter } from '@zip.js/zip.js';
+import { readTable } from './fixtures';
 import { exportZip, importZip } from './export';
 import { newStudioChat, toBytes, toText, type ChatLine, type FileMap, type ToolLine } from './workspace';
 
@@ -26,7 +27,8 @@ describe('project ZIP', () => {
     const imported = await importZip(zip);
     expect([...imported.files.keys()].sort()).toEqual([...files.keys(), 'README.md'].sort());
     for (const [path, bytes] of files) expect(toText(imported.files.get(path)!)).toBe(toText(bytes));
-    expect(toText(imported.fixtures.get('fixtures/todos.csv')!)).toBe(toText(fixtures.get('fixtures/todos.csv')!));
+    expect((await readTable(imported.fixtures, 'todos')).rows).toEqual((await readTable(fixtures, 'todos')).rows);
+    expect(imported.fixtures.has('fixtures/todos.dataset.json')).toBe(true);
     expect(imported.chats.map(item => item.title)).toEqual(['Build app', 'Refine app']);
     expect(imported.chats[0].chat).toEqual(chat);
     expect(imported.chats[0].tools).toEqual(tools);

@@ -1,5 +1,5 @@
 import { createStore } from 'zustand/vanilla';
-import { readTable, tablePath, type Table } from './fixtures';
+import { readTable, tablePath, metadataPath, type Table } from './fixtures';
 import { DraftConflict } from './draftConflict';
 import { sameBytes, type FileSnapshot } from './workspace';
 import { RevisionConflict } from './workspaceStorage';
@@ -28,7 +28,7 @@ export class TableDocuments {
     if (!this.active) return;
     const path = tablePath(fixtures, id), bytes = path ? fixtures.get(path) : undefined;
     const draft = this.state.getState().drafts.get(id);
-    if (draft && path === draft.table.path && sameBytes(bytes, draft.baseline)) return;
+    if (draft && path === draft.table.path && sameBytes(bytes, draft.baseline) && sameBytes(path ? fixtures.get(metadataPath(path)) : undefined, draft.table.metadataBytes)) return;
     if (draft?.dirty) {
       // While saving, preserve every observation without guessing whether it
       // acknowledges our request. The durable result identifies its exact bytes.
@@ -40,7 +40,7 @@ export class TableDocuments {
     const token = (this.parsing.get(id) ?? 0) + 1; this.parsing.set(id, token);
     if (!path || !bytes) { this.update(id); return; }
     try {
-      const table = await readTable(new Map([[path, bytes]]), id);
+      const table = await readTable(fixtures, id);
       // A user edit or save owns the row set after this parse began.
       if (!this.active || this.epoch !== epoch || this.parsing.get(id) !== token || this.state.getState().drafts.get(id)?.dirty) return;
       this.update(id, { table, baseline: bytes.slice(), accepted: bytes.slice(), request: ++this.sequence, dirty: false, status: 'clean' });
@@ -64,12 +64,12 @@ export class TableDocuments {
       const current = this.state.getState().drafts.get(id);
       if (!current) return;
       const accepted = this.accepted();
-      if (tablePath(accepted, id) !== next.path || !sameBytes(accepted.get(next.path), bytes)) {
+      if (tablePath(accepted, id) !== next.path || (!sameBytes(accepted.get(next.path), bytes) || !sameBytes(accepted.get(metadataPath(next.path)), next.metadataBytes))) {
         this.update(id, { ...current, status: 'conflict', accepted: accepted.get(tablePath(accepted, id) ?? '')?.slice(), error: new DraftConflict('table').message });
         return;
       }
       const dirty = current.request !== request;
-      this.update(id, { ...current, table: { ...current.table, path: next.path, format: next.format }, baseline: bytes, accepted: bytes, dirty, status: dirty ? 'dirty' : 'clean' });
+      this.update(id, { ...current, table: dirty ? { ...current.table, path: next.path, format: next.format, definition: next.definition, revision: next.revision, metadataBytes: next.metadataBytes } : next, baseline: bytes, accepted: bytes, dirty, status: dirty ? 'dirty' : 'clean' });
     } catch (error) {
       if (!this.active || epoch !== this.epoch) return;
       const current = this.state.getState().drafts.get(id);

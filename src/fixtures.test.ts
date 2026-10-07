@@ -11,7 +11,7 @@ describe('fixture tables', () => {
     const csv = await tableBytes(source);
     const files: FileMap = new Map([[source.path, csv]]);
     expect(fixtureIds(files)).toEqual(['todos']);
-    expect(await readTable(files, 'todos')).toEqual(source);
+    expect(await readTable(files, 'todos')).toMatchObject(source);
 
     const xlsx: Table = { ...source, path: 'fixtures/todos.xlsx', format: 'xlsx' };
     const spreadsheet = await tableBytes(xlsx);

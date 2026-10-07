@@ -47,7 +47,7 @@ describe('fixture operation boundaries', () => {
     const observed: string[][] = [];
     studio.workspace.store.subscribe(state => { observed.push([...state.fixtures.keys()]); });
     await studio.saveTable(table, studio.workspace.fixtures.get(table.path)!, 0, true);
-    expect(observed).toEqual([['fixtures/todos.xlsx']]);
+    expect(observed).toEqual([['fixtures/todos.xlsx', 'fixtures/todos.dataset.json']]);
     expect((await readTable(studio.workspace.fixtures, 'todos')).rows).toEqual(table.rows);
     studio.stop();
   });

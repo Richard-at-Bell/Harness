@@ -1,6 +1,8 @@
-import { validFixturePath, type Workspace } from './workspace';
+import { fixtureIds } from './fixtures';
+import { toText, validFixturePath, type Workspace } from './workspace';
 
-export type AgentChange = { path: string; before?: Uint8Array; after?: Uint8Array };
+export type PathChange = { path: string; before?: Uint8Array; after?: Uint8Array };
+export type AgentChange = PathChange & { related?: PathChange[] };
 type ChangeWorkspace = Pick<Workspace, 'files' | 'fixtures' | 'write' | 'remove' | 'writeFixture' | 'removeFixture'>;
 
 function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
@@ -8,20 +10,28 @@ function sameBytes(a?: Uint8Array, b?: Uint8Array): boolean {
 }
 
 export async function applyAgentChange(workspace: ChangeWorkspace, change: AgentChange): Promise<boolean> {
-  const fixture = validFixturePath(change.path);
-  const current = (fixture ? workspace.fixtures : workspace.files).get(change.path);
-  if (!sameBytes(current, change.before)) throw new Error(`${change.path} changed while the agent was editing it. Read it again before retrying.`);
-  if (sameBytes(current, change.after)) return false;
-  if (fixture && !change.before && change.after) {
-    const alternate = change.path.endsWith('.csv') ? change.path.slice(0, -4) + '.xlsx' : change.path.slice(0, -5) + '.csv';
-    if (workspace.fixtures.has(alternate)) throw new Error(`A fixture for ${change.path} already exists at ${alternate}. Read it and use write_table to update it.`);
+  const changes = [change, ...(change.related ?? [])];
+  // Validate the complete group before writing any path. Production callers use
+  // a WorkspaceWriter, so schema and data reach storage in one atomic commit.
+  for (const item of changes) {
+    if (item.path.endsWith('.dataset.json') && !item.before && item.after) {
+      const name = JSON.parse(toText(item.after)).definition.name;
+      if (fixtureIds(workspace.fixtures).includes(name) && !changes.some(c => c.before && /\.(csv|xlsx)$/.test(c.path))) throw new Error(`A fixture named ${name} already exists. Read it again.`);
+    }
+    const fixture = validFixturePath(item.path), current = (fixture ? workspace.fixtures : workspace.files).get(item.path);
+    if (!sameBytes(current, item.before)) throw new Error(`${item.path} changed while the agent was editing it. Read it again before retrying.`);
+    if (fixture && /\.(csv|xlsx)$/.test(item.path) && !item.before && item.after) {
+      const alternate = item.path.replace(/\.(csv|xlsx)$/, item.path.endsWith('.csv') ? '.xlsx' : '.csv');
+      if (workspace.fixtures.has(alternate)) throw new Error(`A fixture for ${item.path} already exists at ${alternate}. Read it and use write_table to update it.`);
+    }
   }
-  if (change.after) {
-    if (fixture) await workspace.writeFixture(change.path, change.after);
-    else await workspace.write(change.path, change.after);
-  } else {
-    if (fixture) await workspace.removeFixture(change.path);
-    else await workspace.remove(change.path);
+  let changed = false;
+  for (const item of changes) {
+    if (sameBytes(item.before, item.after)) continue;
+    const fixture = validFixturePath(item.path);
+    if (item.after) { if (fixture) await workspace.writeFixture(item.path, item.after); else await workspace.write(item.path, item.after); }
+    else { if (fixture) await workspace.removeFixture(item.path); else await workspace.remove(item.path); }
+    changed = true;
   }
-  return true;
+  return changed;
 }

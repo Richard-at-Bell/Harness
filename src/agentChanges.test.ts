@@ -30,7 +30,7 @@ describe('automatic agent edits', () => {
     await call('edit_file', { path: 'index.html', oldText: 'Original', newText: 'Applied' });
     expect(toText(workspace.files.get('index.html')!)).toContain('Applied');
     expect(toText(workspace.files.get('styles.css')!)).toContain('blue');
-    await call('write_table', { table: 'todos', rows: [{ id: '1', title: 'Applied row', completed: false, priority: 'high' }] });
+    await call('write_table', { table: 'todos', replaceAll: true, revision: 0, rows: [{ id: '1', title: 'Applied row', completed: false, priority: 'high' }] });
     expect((await readTable(workspace.fixtures, 'todos')).rows[0]).toMatchObject({ title: 'Applied row', priority: 'high' });
     await call('delete_file', { path: 'about.html' });
     expect(workspace.files.has('about.html')).toBe(false);

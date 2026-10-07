@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
+import { fixtureIds, metadataPath } from './fixtures';
+import { toText } from './workspace';
 import { buildPreview } from './preview';
 import { useGeneration, useStudio, useWorkspace } from './studioContext';
 
@@ -30,11 +32,17 @@ export const PreviewPanel = memo(function PreviewPanel({ reload }: { reload: num
       if (current) frame.current?.contentWindow?.postMessage({ ...value as object, token: current.token }, '*');
     };
     const unsubscribe = studio.workspace.store.subscribe((next, before) => {
+      const tables = new Set<string>();
       const paths = new Set([...next.fixtures.keys(), ...before.fixtures.keys()]);
       for (const path of paths) if (next.fixtures.get(path) !== before.fixtures.get(path)) {
-        const table = /^fixtures\/([^/]+)\.(csv|xlsx)$/.exec(path)?.[1];
-        if (table) send({ kind: 'table.changed', table });
+        const metaPath = path.endsWith('.dataset.json') ? path : metadataPath(path);
+        const meta = next.fixtures.get(metaPath) ?? before.fixtures.get(metaPath);
+        const table = meta ? JSON.parse(toText(meta)).definition.name : /^fixtures\/([^/]+)\.(csv|xlsx)$/.exec(path)?.[1];
+        if (table) tables.add(table);
       }
+      for (const table of tables) send({ kind: 'table.changed', table });
+      // Name-only subscriptions continue to work after definition changes.
+      if (!tables.size && next.fixtures !== before.fixtures) for (const table of fixtureIds(next.fixtures)) send({ kind: 'table.changed', table });
     });
     function onMessage(event: MessageEvent) {
       const captured = identity.current;

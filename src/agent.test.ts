@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createTools } from './agent';
-import { readTable, tableBytes, type Table } from './fixtures';
+import { readTable, metadataPath, tableBytes, type Table } from './fixtures';
 import { Stage } from './workspace';
 
 describe('agent fixture tools', () => {
@@ -17,8 +17,8 @@ describe('agent fixture tools', () => {
     const write = tools.find(tool => tool.name === 'write_table')!;
     const result = await read.execute('read', { table: 'todos' });
     expect(JSON.stringify(result)).toContain('Original');
-    await write.execute('write', { table: 'todos', rows: [{ id: '1', title: 'Changed', completed: true, priority: 'high', due_date: '2026-10-02' }] });
-    expect(stage.changes()).toEqual([table.path]);
+    await write.execute('write', { table: 'todos', replaceAll: true, revision: 0, rows: [{ id: '1', title: 'Changed', completed: true, priority: 'high', due_date: '2026-10-02' }] });
+    expect(stage.changes()).toEqual([metadataPath(table.path), table.path].sort());
     expect((await readTable(stage.fixtures, 'todos')).rows[0].title).toBe('Changed');
     expect((await readTable(stage.fixtures, 'todos')).columns).toEqual(['id', 'title', 'completed', 'priority', 'due_date']);
     expect((await readTable(stage.fixtures, 'todos')).rows[0]).toMatchObject({ priority: 'high', due_date: '2026-10-02' });
@@ -30,7 +30,8 @@ describe('agent fixture tools', () => {
     const tools = createTools(stage);
     const call = (name: string, input: object) => tools.find(tool => tool.name === name)!.execute(name, input);
     await call('create_table', { table: 'meals', format, columns: ['id', 'food', 'calories'], rows: [{ id: 'meal-1', food: 'Sample lunch', calories: 420, protein: 25 }] });
-    expect(stage.changes()).toEqual([`fixtures/meals.${format}`]);
+    const created = await readTable(stage.fixtures, 'meals');
+    expect(stage.changes()).toEqual([created.path, metadataPath(created.path)].sort());
     expect(stage.files.size).toBe(0);
     expect(stage.fixtureBaseline.size).toBe(0);
     expect(JSON.stringify(await call('list_tables', {}))).toContain('meals');
@@ -38,7 +39,7 @@ describe('agent fixture tools', () => {
     const table = await readTable(stage.fixtures, 'meals');
     expect(table.columns).toEqual(['id', 'food', 'calories', 'protein']);
     expect(Number(table.rows[0].calories)).toBe(420);
-    await call('write_table', { table: 'meals', rows: [{ ...table.rows[0], calories: 500 }] });
+    await call('write_table', { table: 'meals', replaceAll: true, revision: table.revision, rows: [{ ...table.rows[0], calories: 500 }] });
     expect(Number((await readTable(stage.fixtures, 'meals')).rows[0].calories)).toBe(500);
   });
 
