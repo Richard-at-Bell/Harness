@@ -25,6 +25,7 @@ export class DatasetService {
   async persist(table: Dataset, oldPath?: string, isCurrent: () => boolean = () => true) {
     // All validation and encoding complete before touching the writer. The owner
     // publishes this entire group only after its durable transaction succeeds.
+    if (!Number.isSafeInteger(table.revision) || table.revision < 0 || table.handles.length !== table.rows.length || new Set(table.handles).size !== table.handles.length || table.handles.some(h => typeof h !== 'string' || !h)) throw new Error('Invalid dataset revision or row handles');
     const bytes = await tableBytes(table), meta = metadataBytes(table);
     if (!isCurrent()) throw new Error('Preview was replaced');
     await this.writer.writeFixture(table.path, bytes); await this.writer.writeFixture(metadataPath(table.path), meta);
@@ -59,7 +60,7 @@ export class DatasetService {
     } else {
       incoming.definition = definition ? { ...definition, name } : { ...incoming.definition, id: crypto.randomUUID(), name, provenance: { source: 'imported' } };
       if ((await Promise.all(fixtureIds(this.writer.fixtures).map(n => this.read(n)))).some(d => d.definition.id === incoming.definition.id)) throw new Error('Dataset identity already exists'); incoming.revision = 1;
-      incoming.path = `fixtures/${incoming.definition.id}.${incoming.format}`;
+      incoming.path = `fixtures/${crypto.randomUUID()}.${incoming.format}`;
       this.policy?.validate?.(undefined, incoming);
     }
     return this.persist(incoming, original);

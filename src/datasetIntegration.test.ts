@@ -176,8 +176,9 @@ it('decodes explicit imports consistently, preserves case and identity, and reje
   const invalid = new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer);
   await expect(studio.importTable(new File([invalid as BlobPart], 'FORMULA.xlsx'))).rejects.toThrow('Formula');
   const other = new Workspace((await import('./workspaceStorage')).memoryStorage({}), new Map());
-  const copy = await other.transaction(writer => new DatasetService(writer).import('JOBDATA', 'fixtures/JOBDATA.csv', source, table.definition));
-  expect(copy.definition.id).toBe(table.definition.id); expect(copy.rows).toEqual(table.rows);
+  const importedDefinition = { ...table.definition, id: 'legacy:portable-contract' };
+  const copy = await other.transaction(writer => new DatasetService(writer).import('JOBDATA', 'fixtures/JOBDATA.csv', source, importedDefinition));
+  expect(copy.definition.id).toBe(importedDefinition.id); expect(copy.path).not.toContain('legacy:'); expect(copy.rows).toEqual(table.rows);
   expect(baseline.fixtures.get(table.path)).toEqual(source); studio.stop(); storage.close();
 });
 

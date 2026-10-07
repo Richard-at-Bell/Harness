@@ -22,10 +22,12 @@ Status: **Draft for review**
 | **Diff** | The before/after view of changed text files for a turn or checkpoint. |
 | **Preview** | An isolated iframe running a materialized copy of the accepted project in the browser. |
 | **Preview bridge** | A narrow message protocol between the isolated project preview and the studio's fixture service. |
-| **Fixture** | A named CSV/XLSX table owned by Studio data. The preview reads and changes it through the bridge; it is separate from project source files. |
-| **Table creation** | The agent’s `create_table` operation adds a named CSV/XLSX Studio fixture with ordered columns and optional rows. It follows the selected review mode and refuses an existing table identity. |
+| **Fixture** | A typed dataset owned by Studio data, with CSV/XLSX bytes and a versioned definition/row-handle sidecar. The preview reads and changes it through the bridge; it is separate from project source files. |
+| **Table creation** | The agent’s `create_table` operation adds a named CSV/XLSX Studio fixture with ordered typed fields and optional rows. It follows the selected review mode and refuses an existing table identity. |
 | **Chat** | One agent conversation with its own transcript, tool activity, model selection, and local Pi context. Chats share the project and fixtures. |
-| **Normalized table** | The in-memory row and column representation used to read, validate, edit, and serialize either fixture format. |
+| **Normalized table** | The dataset definition, ordered fields, typed values, revision and Studio handles shared by both fixture codecs. |
+| **Studio row handle** | A persisted opaque row identity separate from serialized business fields; supports targeting duplicate business codes. |
+| **Dataset policy** | A grow/fixed schema setting and optional generic validation callback for binding restrictions. |
 | **Generation recipe** | Schema, seed, reference date, and generator version used to reproduce a sample table. |
 | **BYOK** | Bring your own key: the user provides a model provider API key for calls made from their browser. |
 | **Portable ZIP** | The download containing the runnable project plus studio chat, logs, recipes, checkpoints, and manifest. |

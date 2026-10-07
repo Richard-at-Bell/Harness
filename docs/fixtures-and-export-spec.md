@@ -1,79 +1,73 @@
-# Fixtures and ZIP format
+# Typed datasets and ZIP format
 
-Status: **Draft for review** · Related decisions: [D-006](decisions.md#d-006-what-table-writes-mean-after-export), [D-007](decisions.md#d-007-fixture-formats)
+Implemented 2026-10-07. Related decisions: [D-006](decisions.md#d-006-what-table-writes-mean-after-export), [D-007](decisions.md#d-007-fixture-formats). The ownership guarantees are described in [state ownership](state-ownership.md).
 
-## Table model
+## Definition and identity
 
-A fixture is a named table, not a mock API. Its schema declares ordered columns, a stable row ID column, primitive value types, nullable fields, and an optional generation recipe. Supported value types for the first release are text, number, boolean, date as ISO text, and empty. Formula execution, cell formatting, macros, charts, multiple joined sheets, and arbitrary workbook features are outside this model.
+`src/datasets.ts` defines `DatasetDefinition`, `Field`, `Dataset`, `Mutation` and `DatasetPolicy`. A definition contains a stable Studio ID, a case-preserving display name, ordered fields with stable IDs and case-preserving names, a schema revision, a blank policy, a `grow` or `fixed` schema policy, and generic provenance (`source`, optional `reference` and `revision`). Fields declare `text`, `number`, `boolean` or `datetime`, nullability, optional defaults, permissions and constraints. Constraints support numeric bounds/integer, text length/pattern and an allowed-value list.
 
-The current serializer preserves existing column order and appends new fields found in rows. Preview inserts/updates and the agent's `write_table` can therefore introduce fields such as `priority` or `due_date` without silently losing them. Nested objects, arrays, and nonfinite numbers fail with a readable error. Fields absent from older rows become empty cells. Explicit column rename, deletion, and type editing remain future work; the typed schema below is the planned richer contract.
+A dataset has ordered typed rows, a data revision and opaque Studio row handles. Handles are persisted beside the rows and never become CSV/XLSX business columns. An optional `rowIdentity` references a declared field ID; if present, its values must be nonblank and unique. Datasets without a business identity support duplicate codes and targeted edits by handle. New datasets use UUID storage stems independently of display names. Legacy stems and names retain their original casing.
 
-The fixture service converts CSV or XLSX bytes into the normalized table model, validates values, and serializes rows back to the chosen file format. A fixture has one authoritative Studio data file, separate from project source files. The table editor and preview mutate the normalized table through the fixture service; serializing a mutation updates that file. The preview never edits spreadsheet bytes directly.
-
-```ts
-interface TableFixture {
-  id: string;
-  path: string;               // e.g. studio/fixtures/todos.csv in the ZIP
-  format: "csv" | "xlsx";
-  sheet?: string;             // required when format is xlsx
-  idColumn: string;
-  columns: Array<{ name: string; type: "text" | "number" | "boolean" | "date"; nullable: boolean }>;
-  revision: string;
-}
-```
-
-## Agent table creation
-
-The agent uses `create_table` to add a Studio fixture and `write_table` to update one. Creation accepts a lowercase table name (1–60 letters, digits, underscores, or hyphens), unique nonempty ordered column names, optional scalar rows, and an optional `csv` or `xlsx` format. CSV is the default. Empty tables retain their declared columns. The current tool accepts at most 1,000 initial rows and refuses an existing table name in either format. It never replaces another table.
-
-A created table is staged when review is on and saved before tool success when review is off. Save failures roll back the staged creation; concurrent creation of the same table in another format is rejected. Managed tables are available through `list_tables`, `read_table`, and the preview bridge. `fixture-seed.js` remains derived output and cannot substitute for a missing Studio table.
-
-## To-do reference fixture
-
-`fixtures/todos.csv` starts with `id,title,completed,created_at`. `id` is unique and stable; `title` is nonempty text; `completed` is boolean; `created_at` is an ISO 8601 timestamp. The template includes a few sample rows, including a completed task and a title containing a comma to prove CSV quoting works. The UI can regenerate them from a saved seed and fixed reference date.
-
-Generation is deterministic for the current table editor: the same schema and seed produce the same rows. Persisting recipes and generator versions in `studio/fixture-recipes.json` is a later seam. Regeneration previews rows before save. Faker supports seeded generation but its output can change across versions, and relative dates need a fixed reference date. [Faker guidance](https://fakerjs.dev/guide/usage)
-
-## CSV and XLSX behavior
-
-| Operation | CSV | XLSX |
-| --- | --- | --- |
-| Create/generated data | Yes | Yes, from the normalized table |
-| Import | Header row mapped to schema | User selects one worksheet and maps its header row |
-| Preview read/write | Through normalized table bridge | Through the same bridge |
-| Save to Studio data | UTF-8 CSV with stable column order | Workbook with one data sheet for that fixture |
-| Round-trip guarantee | Supported typed values and row order | Supported typed values, selected sheet name, and row order |
-
-When importing an XLSX, the user sees a warning that workbook styling, formulas, and unrelated sheets are not preserved by the table model. CSV export quotes correctly and neutralizes spreadsheet formula-like text on export. The browser implementation must round-trip both formats in a prototype before XLSX is committed to the first release.
-
-## What a project can change
-
-Inside the **studio preview**, `app.js` uses the generated `data-store.js` adapter to list and mutate `todos`. The adapter sends a request to the studio's table bridge. The studio writes the updated CSV or XLSX file to Studio data. Subsequent previews and the exported ZIP use those updated rows.
-
-The adapter exposes a plain JavaScript API to authored code: `list(tableId)`, `insert(tableId, row)`, `update(tableId, rowId, patch)`, and `remove(tableId, rowId)`, all returning promises, plus `subscribe(tableId, callback)` for change notifications. IDs are assigned or validated by the fixture service. An edit to a missing row fails explicitly. This same API uses the preview bridge in the studio and local browser persistence in the standalone site, so `app.js` does not need two code paths.
-
-Outside the studio, an exported static web page cannot silently rewrite its packaged CSV/XLSX file on disk. At export, the builder derives `fixture-seed.js` from the current Studio fixture rows. The standalone adapter reads those initial rows, stores later changes in that browser's local storage, and offers an explicit **Download updated table** action. `fixture-seed.js` is generated output; the CSV/XLSX in `studio/fixtures/` is the authoritative file. If the user imports the downloaded table back into the studio, it becomes the Studio fixture. This keeps the project runnable without a backend. Whether the standalone app should instead require a user-selected writable file is [D-006](decisions.md#d-006-what-table-writes-mean-after-export).
-
-## ZIP layout
+The authoritative fixture group is:
 
 ```text
-project-studio-export.zip
-├── manifest.json
-├── project/
-│   ├── index.html
-│   ├── styles.css
-│   ├── app.js
-│   ├── data-store.js
-│   ├── fixture-seed.js          # derived from current fixture rows
-│   └── README.md
-└── studio/
-    ├── fixtures/
-    │   └── todos.csv             # or todos.xlsx
-    ├── chats.json                # chat titles, models, and IDs
-    ├── chat.jsonl                # messages tagged with chatId
-    └── tool-events.jsonl         # tool events tagged with chatId
+fixtures/<storage-stem>.csv       # alternatively .xlsx
+fixtures/<storage-stem>.dataset.json
 ```
 
-`manifest.json` records format version 2, export time, entry file, fixture file list, active chat ID, and SHA-256 hashes. `chats.json` describes each chat; `chat.jsonl` and `tool-events.jsonl` carry all conversations and logs tagged with chat IDs. Pi's internal context remains browser-local and is not exported. Studio-managed credentials and authorization headers are excluded. Checkpoints and generation recipes remain future additions to the ZIP.
+The JSON sidecar contract is `{version: 1, definition, revision, handles}`. It belongs to the existing Workspace fixture map and IndexedDB manifest, not another persistence system. Its definition is validated against the exact ordered header and row count. Orphan metadata, duplicate dataset identities/names, mismatched headers and invalid values fail validation.
 
-The exporter creates the ZIP from the accepted project and Studio data snapshots, then offers the download. The importer rejects path traversal, duplicate names, oversized entries, and unsupported versions before committing any data. It migrates v1 ZIP fixtures from `project/fixtures/` to `studio/fixtures/`. The project README explains how to serve the static site locally and how standalone table persistence works.
+## Shared operations
+
+`DatasetService` runs on a `DatasetWriter` inside the Workspace transaction queue or an isolated agent Stage. `StudioRuntime.datasets` exposes `create`, `read`, `page` and `mutate`. `saveTable` and `importTable` use the same service. Mutation variants are `insert`, `update`, `remove`, explicit `replace`, and `addFields`. Targeted operations require an expected dataset revision and a Studio handle. `addFields` declares new field contracts and optional values for selected handles in one operation. Existing fields, order, handles and older rows survive additive changes.
+
+In a `grow` dataset, previously undeclared scalar fields in a mutation create an explicit definition revision alongside their values. The type comes from native values, never from guessing whether text looks numeric or Boolean. Added fields are nullable; missing values in older rows become null. All-null additions default to nullable text; use `addFields` to choose another type or constraints. Mixed native types, nested values and nonfinite numbers are rejected. A `fixed` dataset rejects added fields. Declared fields enforce their types, constraints and read-only permissions across editor saves, tools, preview mutations and imports. Creation can seed read-only fields; later writes cannot change them.
+
+`DatasetPolicy.validate(before, after)` is the narrow additional validation boundary. StudioRuntime accepts it and passes it to both preview/user services and agent callbacks. A later binding module can enforce accepted external contracts without replacing storage, review or codecs. No provider-specific conventions are built in.
+
+The serializer accepts a declared definition and rejects undeclared fields. Legacy `Table` inputs remain a compatibility boundary for older callers/tests; legacy migration supplies a definition before normal operations.
+
+## CSV and XLSX codecs
+
+Both codecs use the same schema and normalized rows. CSV uses UTF-8, comma delimiters, quoted fields and exact ordered headers. XLSX uses one data worksheet with native numeric/Boolean cells and text for declared datetime values. Datetimes require a timezone, reject invalid calendar values and precision beyond milliseconds, and normalize to UTC ISO text. Formula/object/rich-text cells, additional worksheets and extra cells are rejected with an explicit conversion error; workbook formatting is not retained.
+
+The `escaped-null-v1` policy distinguishes blank text from null:
+
+| Declared field | Blank CSV / blank XLSX cell | Null representation |
+| --- | --- | --- |
+| Text | Empty string, including nonnullable text | `\N` when nullable |
+| Number / Boolean / datetime | Null if nullable; error otherwise | Blank, or explicit `\N` |
+
+Literal text beginning with a backslash is escaped with an additional backslash. Text beginning with `=`, `+`, `-`, `@`, tab or carriage return is also prefixed with a backslash, preventing spreadsheet formula interpretation while preserving the original text on decoding. A literal `\N` therefore differs from null. Text `0007` and `TRUE` remain text. Declared numbers and Booleans decode only supported number syntax and lowercase `true`/`false`; malformed or lossy values fail before writes.
+
+A standalone CSV/XLSX file lacks its Studio definition. New CSV imports therefore declare text fields; XLSX imports preserve homogeneous native scalar types, with ambiguous mixed columns rejected. Importing into an existing named dataset decodes using its declared schema and preserves its definition/ID. Such an import deliberately replaces all rows and assigns new handles. ZIP is the complete portable contract, including field types, constraints and row identity.
+
+## Legacy compatibility and generation
+
+Legacy datasets receive deterministic `legacy:<name>` identities and field/row IDs, then persist their sidecars on workspace open, reset or ZIP migration. Generic CSV values remain strings. Only the reference `todos` contract declares `completed` Boolean, `created_at` datetime and its UUID/time/false defaults. A legacy unique nonblank `id` field becomes an optional declared identity; duplicate codes do not become identities. Existing bytes remain unchanged when attaching metadata is already lossless; values needing escapes are reencoded atomically with their metadata. Migration is repeatable and leaves OPFS backups untouched.
+
+Generation uses declared types and a seed, with a fixed reference date, rather than column-name assumptions. Generated rows remain a draft until saved; normal validation also applies to generated values. Persisted generation recipes and column rename/delete/type-edit UI remain future work. The grid edits typed values, exposes an explicit null action, disables read-only cells and displays at most 100 rows per page.
+
+## Agent and preview contracts
+
+`read_table` returns a bounded page: definition, revision, columns, total, offset, nextOffset, rows and handles. Defaults are offset 0 and limit 100; limits are 1–1000, with a 200,000-character budget for the definition and row/handle content. A single oversized row fails explicitly. `insert_row`, `update_row` and `remove_row` require a revision; targeted tools preserve unread rows. `write_table` intentionally requires `replaceAll: true` and a revision because it replaces the complete row set. `create_table` accepts typed fields, up to 1000 initial rows and optional format/policy/identity. Legacy `columns` shorthand infers native value types and declares an `id` identity for existing authored-app compatibility. Data service datasets support at most 100,000 rows; bounded reads still parse the complete local fixture in memory.
+
+Review stages the complete changed fixture group. Acceptance writes schema and row bytes in one durable transaction, or retains the original acceptance and review on failure. Discard writes nothing. Automatic agent changes save one complete group per tool; a failed tool restores its Stage. A successful earlier tool remains accepted after a later failure.
+
+Existing authored `StudioData.list/insert/update/remove/subscribe` calls remain supported, including declared business IDs. The current template adds `page(table, {offset, limit})`; update/remove can use handles and an optional `{revision}` argument, and insert accepts optional revision options. The adapter remembers read revisions. Legacy bridge messages still return their original values; protocol 2 adds a `{value, revision}` response envelope. Source-window, token, workspace generation and current-preview guards still apply before and after asynchronous parsing/encoding. Fixture commits notify display names without rebuilding project code.
+
+`fixture-seed.js` contains typed initial rows, definitions/handles and the same self-contained validation kernel used by Studio. In an exported static site, the adapter uses browser local storage, migrates old local row arrays, validates changes and can download updated CSV. It cannot rewrite packaged files. Existing authored adapter files are preserved; the enhanced adapter is supplied by new/reset templates and is available to authored projects explicitly.
+
+## ZIP contract and integrity
+
+Exports use manifest version **3** with `datasetMetadataVersion: 1`. Project source stays under `project/`; fixture bytes and sidecars stay under `studio/fixtures/`. Chats and tool events retain the v2 layout. Generated `project/fixture-seed.js` is derived output. Model credentials and internal provider conversation context remain excluded.
+
+The manifest lists both fixture files and sidecars and SHA-256 hashes. Import checks exact fixture membership, required sidecars/hashes, path safety, duplicate entries, size limits, supported metadata versions and typed dataset validity before workspace activation. Byte comparisons and hashes establish integrity and stale-write detection. `datasetMeaning`/`compareDatasets` establish separate definition and normalized-row meaning; container bytes, format, path and data revision are not semantic comparisons. Review displays schema and typed rows using full before/after fixture snapshots, including XLSX.
+
+V1 archives migrate project-nested fixtures; v2 archives migrate Studio fixture files. Both receive validated sidecars through the same legacy migration. Plain project ZIPs remain supported. Unknown newer versions fail. Import/reset activate accepted data, replacement session and identity together. Export reads accepted snapshots and does not include dirty drafts or pending reviews.
+
+## Verification
+
+`src/datasetIntegration.test.ts` exercises real Workspace/IndexedDB, service, agent-turn/tool and preview-request boundaries. Its JOBDATA contract covers `0007`, 12.5, true, `TRUE`, normalized datetime, empty nonnullable text, nullable number/text, Unicode, quotes, commas, newline, literal null marker and formula-like text. It verifies save, CSV→XLSX→CSV, durable reload and ZIP import, comparing stable identity, ordered contracts, handles and normalized values. Further checks cover duplicate-code targeting, review acceptance/discard/failure/retry, schema-only draft conflicts, fixed/read-only/type policies, explicit imports, 1505-row paginated tools, automatic rollback and preview supersession during encoding.
+
+`src/dataAdapter.test.ts` executes the generated kernel and authored adapter for standalone typed operations, to-do calls and legacy local storage. The isolated browser scenario verifies typed grid editing, actual iframe handle mutation, controlled agent growth, retained/copyable conflicting rows, recovery and durable reload without a provider request. See [browser instructions](../tests/browser/README.md).

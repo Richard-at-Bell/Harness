@@ -1,9 +1,19 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Check, Plus, Trash2 } from 'lucide-react';
 import { useStore } from 'zustand';
 import { useDocuments } from './documentContext';
 import { defaultValue, generateRows, tablePath, type Table } from './fixtures';
 import { useStudio, useWorkspace } from './studioContext';
+
+// Keep intermediate numeric text (for example "12.") in the editing cell.
+// Invalid text remains recoverable in the draft and fails shared save validation.
+function NumberCell({ value, label, disabled, onChange }: { value: string | number | boolean | null; label: string; disabled: boolean; onChange: (value: string | number) => void }) {
+  const [text, setText] = useState(String(value ?? '')), focused = useRef(false);
+  useEffect(() => { if (!focused.current) setText(String(value ?? '')); }, [value]);
+  return <input aria-label={label} inputMode="decimal" disabled={disabled} placeholder={value === null ? 'null' : undefined} value={text}
+    onFocus={() => { focused.current = true; }} onBlur={() => { focused.current = false; setText(String(value ?? '')); }}
+    onChange={event => { const raw = event.target.value; setText(raw); onChange(/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw) ? Number(raw) : raw); }} />;
+}
 
 export const DataPanel = memo(function DataPanel({ selectedTableId, onImport }: { selectedTableId: string; onImport: () => void }) {
   const studio = useStudio(), { tables: documents } = useDocuments();
@@ -27,7 +37,7 @@ export const DataPanel = memo(function DataPanel({ selectedTableId, onImport }: 
         const index = offset + local;
         return <tr key={table.handles?.[index] ?? index}>{table.columns.map(column => {
           const field = table.definition?.fields.find(f => f.name === column), nullable = field?.nullable, isNull = row[column] === null;
-          return <td key={column}>{field?.type === 'boolean' ? <input aria-label={`${column} row ${index + 1}`} disabled={field.writable === false || isNull} type="checkbox" checked={row[column] === true} onChange={e => change(index, column, e.target.checked)} /> : <input aria-label={`${column} row ${index + 1}`} disabled={field?.writable === false || isNull} placeholder={isNull ? 'null' : undefined} value={String(row[column] ?? '')} onChange={e => change(index, column, field?.type === 'number' ? e.target.value === '' && nullable ? null : e.target.value === '' ? NaN : Number(e.target.value) : e.target.value)} />}
+          return <td key={column}>{field?.type === 'boolean' ? <input aria-label={`${column} row ${index + 1}`} disabled={field.writable === false || isNull} type="checkbox" checked={row[column] === true} onChange={e => change(index, column, e.target.checked)} /> : field?.type === 'number' ? <NumberCell value={row[column]} label={`${column} row ${index + 1}`} disabled={field.writable === false || isNull} onChange={value => change(index, column, value)} /> : <input aria-label={`${column} row ${index + 1}`} disabled={field?.writable === false || isNull} placeholder={isNull ? 'null' : undefined} value={String(row[column] ?? '')} onChange={e => change(index, column, e.target.value)} />}
             {nullable && field?.writable !== false && <button aria-label={`${column} row ${index + 1} ${isNull ? 'set value' : 'set null'}`} onClick={() => change(index, column, isNull ? defaultValue({ ...field!, nullable: false }) : null)}>{isNull ? 'Value' : 'Null'}</button>}</td>;
         })}<td><button className="row-delete" aria-label={`Delete row ${index + 1}`} onClick={() => edit(current => ({ ...current, rows: current.rows.filter((_, i) => i !== index), handles: current.handles?.filter((_, i) => i !== index) }))}><Trash2 size={14} /></button></td></tr>;
       })}</tbody></table></div>
