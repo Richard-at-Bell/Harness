@@ -58,6 +58,12 @@ export async function importZip(blob: Blob): Promise<{ files: FileMap; fixtures:
     const manifest = JSON.parse(toText(unpacked.get('manifest.json')!)) as ExportManifest;
     if (manifest.format !== 'browser-project-studio' || ![1, 2, 3].includes(manifest.version)) throw new Error('Unsupported studio ZIP version');
     version = manifest.version;
+    if (version >= 2) {
+      // Project-nested fixtures belong only to v1/plain-project migration.
+      // Reject misplaced modern entries even when they would otherwise be ignored.
+      const misplaced = [...unpacked.keys()].find(path => path.startsWith('project/fixtures/') || path.startsWith('fixtures/'));
+      if (misplaced) throw new Error(`Misplaced managed fixture in Studio ZIP: ${misplaced}. Use the declared studio/fixtures namespace.`);
+    }
     if (version === 3) {
       if (manifest.datasetMetadataVersion !== 1 || !Array.isArray(manifest.fixtureFiles)) throw new Error('Unsupported dataset metadata contract');
       const actual = [...unpacked.keys()].filter(p => p.startsWith('studio/fixtures/')).sort();
@@ -100,7 +106,7 @@ export async function importZip(blob: Blob): Promise<{ files: FileMap; fixtures:
     }
     if (path.startsWith(prefix)) {
       const relative = path.slice(prefix.length);
-      if (validFixturePath(relative)) fixtures.set(relative, bytes);
+      if (version < 2 && validFixturePath(relative)) fixtures.set(relative, bytes);
       else if (relative && relative !== 'fixture-seed.js' && validProjectPath(relative)) files.set(relative, bytes);
     }
   }
