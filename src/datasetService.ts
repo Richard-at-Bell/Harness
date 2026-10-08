@@ -1,5 +1,5 @@
 import { datasetMeaning, pageDataset, growDefinition, mutateDataset, normalizeRows, validateDefinition, type Dataset, type DatasetDefinition, type DatasetPolicy, type Field, type Mutation, type Row } from './datasets';
-import { fixtureIds, metadataBytes, metadataPath, readTable, tableBytes, tablePath } from './fixtures';
+import { decodeTable, fixtureIds, metadataBytes, metadataPath, readTable, tableBytes, tablePath } from './fixtures';
 import { copyFiles, sameBytes, type FileMap, type FileSnapshot } from './workspace';
 export type DatasetWriter = { readonly fixtures: FileSnapshot; writeFixture(path: string, bytes: Uint8Array): Promise<void>; removeFixture(path: string): Promise<void> };
 export type CreateDataset = { name: string; fields: Omit<Field, 'id'>[]; rows?: Row[]; format?: 'csv' | 'xlsx'; schemaPolicy?: 'grow' | 'fixed'; rowIdentity?: string; provenance?: DatasetDefinition['provenance'] };
@@ -44,16 +44,12 @@ export class DatasetService {
   }
   async import(name: string, path: string, bytes: Uint8Array, definition?: DatasetDefinition) {
     const original = tablePath(this.writer.fixtures, name);
-    let incoming: Dataset;
-    if (definition) {
-      const raw = await readTable(new Map([[path, bytes]]), path.slice(9).replace(/\.(csv|xlsx)$/, ''));
-      const handles = raw.rows.map(() => crypto.randomUUID());
-      incoming = await readTable(new Map([[path, bytes], [metadataPath(path), metadataBytes({ ...raw, definition, handles, revision: 1 })]]), definition.id);
-    } else incoming = await readTable(new Map([[path, bytes]]), name);
-    if (original) {
-      const before = await this.read(name);
-      // Import into an existing dataset decodes its declared schema. No inference.
-      incoming = await readTable(new Map([[path, bytes], [metadataPath(path), metadataBytes({ ...before, path, handles: incoming.rows.map(() => crypto.randomUUID()) })]]), before.definition.id);
+    const before = original ? await this.read(name) : undefined;
+    const contract = before?.definition ?? definition;
+    // Raw parsing/row counts must precede decoding, never an untyped readTable
+    // that could infer a reference to-do schema from the incoming filename.
+    const incoming = contract ? await decodeTable(bytes, path, contract) : await readTable(new Map([[path, bytes]]), name);
+    if (before) {
       incoming.path = before.path.replace(/\.(csv|xlsx)$/, '.' + incoming.format); incoming.revision = before.revision + 1;
       this.policy?.validate?.(before, incoming);
       for (const f of before.definition.fields) if (f.writable === false) throw new Error(`Field ${f.name} is read-only; use targeted edits`);

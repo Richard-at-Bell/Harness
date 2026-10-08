@@ -81,6 +81,19 @@ function decode(f: Field, raw: unknown): Value {
   }
   return normalizeValue(f, raw);
 }
+/** Decode a declared contract directly; this path never invokes legacy inference. */
+function declaredRows(parsed: { columns: string[]; rows: unknown[][] }, definition: DatasetDefinition): Row[] {
+  if (JSON.stringify(parsed.columns) !== JSON.stringify(definition.fields.map(f => f.name))) throw new Error('Fixture header does not match declared schema');
+  return parsed.rows.map(row => Object.fromEntries(definition.fields.map((f, i) => [f.name, decode(f, row[i])])));
+}
+export async function decodeTable(bytes: Uint8Array, path: string, definition: DatasetDefinition): Promise<Dataset> {
+  validateDefinition(definition);
+  if (!/\.(csv|xlsx)$/.test(path)) throw new Error('Fixture format must be csv or xlsx');
+  const format = path.endsWith('.xlsx') ? 'xlsx' : 'csv';
+  const parsed = await cells(bytes, format);
+  const rows = normalizeRows(definition, declaredRows(parsed, definition));
+  return { path, format, definition, columns: parsed.columns, rows, handles: rows.map(() => crypto.randomUUID()), revision: 1 };
+}
 /** Only legacy migration knows about the reference template. Generic CSV is text. */
 function legacyDefinition(name: string, columns: string[], rows: Row[]): DatasetDefinition {
   const todo = name === 'todos' && columns.includes('id') && columns.includes('title') && columns.includes('completed');
@@ -107,8 +120,7 @@ export async function readTable(files: FileSnapshot, id: string): Promise<Datase
   let definition: DatasetDefinition, rows: Row[], handles: string[], revision: number;
   if (meta) {
     definition = meta.definition;
-    if (JSON.stringify(parsed.columns) !== JSON.stringify(definition.fields.map(f => f.name))) throw new Error('Fixture header does not match declared schema');
-    rows = parsed.rows.map(row => Object.fromEntries(definition.fields.map((f, i) => [f.name, decode(f, row[i])])));
+    rows = declaredRows(parsed, definition);
     handles = meta.handles; revision = meta.revision;
     if (handles.length !== rows.length) throw new Error('Dataset row count does not match handles');
   } else {

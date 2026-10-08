@@ -199,3 +199,37 @@ it('rolls back the entire automatic agent schema/data group on storage failure a
   await expect(studio.tableRequest(0, 'JOBDATA', 'update', { handle: table.handles[0], revision, patch: { Amount: 66 } }, () => ++checks < 3)).rejects.toThrow('Preview was replaced');
   expect(checks).toBe(3); expect(workspace.store.getState()).toBe(accepted); studio.stop(); storage.close();
 });
+
+it('uses explicit and existing schemas before interpreting todos imports, preserving text flags and the declared contract', async () => {
+  const { studio, workspace, storage } = await setup();
+  const table = await studio.datasets.create({ name: 'todos', fields: [
+    { name: 'id', type: 'text', nullable: false },
+    { name: 'title', type: 'text', nullable: false, constraints: { maxLength: 50 } },
+    { name: 'completed', type: 'text', nullable: false, constraints: { values: ['TRUE', 'FALSE'] } },
+    { name: 'created_at', type: 'datetime', nullable: false },
+    { name: 'Amount', type: 'number', nullable: false, constraints: { min: 0, max: 100 } },
+  ], rows: [
+    { id: 'one', title: 'Text flag', completed: 'FALSE', created_at: '2026-10-07T12:00:00Z', Amount: 12.5 },
+    { id: 'two', title: 'Other flag', completed: 'TRUE', created_at: '2026-10-07T12:00:00Z', Amount: 20 },
+  ] });
+  const { tableBytes } = await import('./fixtures');
+  const { memoryStorage } = await import('./workspaceStorage');
+  try {
+    for (const format of ['csv', 'xlsx'] as const) {
+      const path = `fixtures/todos.${format}`, bytes = await tableBytes({ ...table, path, format });
+      const fresh = new Workspace(memoryStorage({}), new Map());
+      const explicit = await fresh.transaction(writer => new DatasetService(writer).import('todos', path, bytes, table.definition));
+      expect(explicit.definition).toEqual(table.definition); expect(explicit.rows).toEqual(table.rows);
+      await studio.importTable(new File([bytes as BlobPart], `todos.${format}`));
+      const existing = await studio.datasets.read('todos');
+      expect(existing.definition).toEqual(table.definition); expect(existing.columns).toEqual(table.columns); expect(existing.rows).toEqual(table.rows);
+      const before = workspace.store.getState();
+      const wrongType = await tableBytes({ path, format, columns: table.columns, rows: [{ ...table.rows[0], Amount: 'bad' }], definition: { ...table.definition, fields: table.definition.fields.map(f => f.name === 'Amount' ? { ...f, type: 'text', constraints: undefined } : f) } });
+      await expect(studio.importTable(new File([wrongType as BlobPart], `todos.${format}`))).rejects.toThrow(/Amount/);
+      expect(workspace.store.getState()).toBe(before);
+    }
+    const before = workspace.store.getState();
+    await expect(studio.importTable(new File(['ID,title,completed,created_at,Amount\none,Text,FALSE,2026-10-07T12:00:00Z,12.5\n'], 'todos.csv'))).rejects.toThrow('header');
+    expect(workspace.store.getState()).toBe(before);
+  } finally { studio.stop(); storage.close(); }
+});
