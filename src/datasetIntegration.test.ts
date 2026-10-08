@@ -233,3 +233,47 @@ it('uses explicit and existing schemas before interpreting todos imports, preser
     expect(workspace.store.getState()).toBe(before);
   } finally { studio.stop(); storage.close(); }
 });
+
+it('rejects lossy numeric decoding before persistence while preserving supported decimals and scientific notation', async () => {
+  const { studio, workspace, storage } = await setup();
+  await studio.datasets.create({ name: 'Numeric', fields: [{ name: 'Amount', type: 'number', nullable: false }], rows: [{ Amount: 1 }] });
+  const { BlobReader, BlobWriter, Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } = await import('@zip.js/zip.js');
+  const ExcelJS = await import('exceljs'), workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Data'); sheet.addRow(['Amount']); sheet.addRow([1]);
+  const reader = new ZipReader(new BlobReader(new Blob([new Uint8Array(await workbook.xlsx.writeBuffer() as ArrayBuffer)])));
+  const entries = new Map<string, Uint8Array>();
+  try { for (const entry of await reader.getEntries()) if (!entry.directory) entries.set(entry.filename, await entry.getData!(new Uint8ArrayWriter())); }
+  finally { await reader.close(); }
+  async function numericFile(value: string, format: 'csv' | 'xlsx') {
+    if (format === 'csv') return new File([`Amount\n${value}\n`], 'Numeric.csv');
+    // Replace the XML lexeme directly: constructing a JS number here would
+    // already round the malicious value before it reaches the XLSX decoder.
+    const writer = new ZipWriter(new BlobWriter('application/zip'));
+    for (const [path, bytes] of entries) {
+      const changed = path === 'xl/worksheets/sheet1.xml' ? toBytes(new TextDecoder().decode(bytes).replace(/(<c\b[^>]*\br="A2"[^>]*>)([\s\S]*?)(<\/c>)/, (_all, start, cell, end) => start + cell.replace(/<v>[^<]*<\/v>/, `<v>${value}</v>`) + end)) : bytes;
+      await writer.add(path, new Uint8ArrayReader(changed));
+    }
+    return new File([await writer.close()], 'Numeric.xlsx');
+  }
+  const unsupported = ['9007199254740993', '-9007199254740993', '9007199254740992', '1e20', '0.1234567890123456789', '1.0000000000000001', '-0.100000000000000005', '1e309', '-1e309', '1e-400', '-1e-400', '4e-324'];
+  const supported: [string, number][] = [['12.5', 12.5], ['-12.5', -12.5], ['.125', .125], ['1.25e+2', 125], ['-2.5e-3', -.0025], ['1.2300e-1', .123], ['9.007199254740991e15', Number.MAX_SAFE_INTEGER], ['5e-324', Number.MIN_VALUE], ['0.30000000000000004', 0.30000000000000004], ['-0', 0]];
+  try {
+    for (const format of ['csv', 'xlsx'] as const) {
+      for (const value of unsupported) {
+        const before = workspace.store.getState();
+        await expect(studio.importTable(await numericFile(value, format)), `${format}: ${value}`).rejects.toThrow(/numeric precision.*text field/i);
+        expect(workspace.store.getState(), `${format}: ${value}`).toBe(before);
+      }
+      for (const [value, expected] of supported) {
+        await studio.importTable(await numericFile(value, format));
+        expect((await studio.datasets.read('Numeric')).rows[0].Amount, `${format}: ${value}`).toBe(expected);
+      }
+    }
+    await studio.datasets.create({ name: 'ExactText', fields: [{ name: 'Digits', type: 'text', nullable: false }] });
+    await studio.importTable(new File(['Digits\n9007199254740993\n0.1234567890123456789\n'], 'ExactText.csv'));
+    expect((await studio.datasets.read('ExactText')).rows).toEqual([{ Digits: '9007199254740993' }, { Digits: '0.1234567890123456789' }]);
+    const accepted = await studio.datasets.read('Numeric'), before = workspace.store.getState();
+    await expect(studio.datasets.mutate('Numeric', { op: 'update', handle: accepted.handles[0], patch: { Amount: Number.MAX_SAFE_INTEGER + 1 } }, accepted.revision)).rejects.toThrow(/numeric precision.*text field/i);
+    expect(workspace.store.getState()).toBe(before);
+  } finally { studio.stop(); storage.close(); }
+});

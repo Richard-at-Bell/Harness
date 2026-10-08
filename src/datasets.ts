@@ -38,10 +38,34 @@ export function datasetKernel() {
     }
     if (d.rowIdentity && !ids.has(d.rowIdentity)) throw new Error('Row identity must reference a field identity');
   }
+  function numericPrecisionError(name: string): never {
+    throw new Error(`Unsupported ${name} numeric precision: values must be finite, integers must be safe, and decimal digits must round-trip unchanged. Use a text field to retain exact digits.`);
+  }
+  function supportedNumber(value: number, name: string): number {
+    if (!Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value)) numericPrecisionError(name);
+    return value === 0 ? 0 : value; // The data contract normalizes negative zero.
+  }
+  function decimalIdentity(text: string): string {
+    const [mantissa, exponent = '0'] = text.toLowerCase().split('e');
+    const fraction = mantissa.split('.')[1]?.length ?? 0;
+    const digits = mantissa.replace(/^-/, '').replace('.', '').replace(/^0+/, '');
+    if (!digits) return '0';
+    const significant = digits.replace(/0+$/, '');
+    const scale = Number(exponent) - fraction + digits.length - significant.length;
+    return (mantissa.startsWith('-') ? '-' : '') + significant + 'e' + scale;
+  }
+  /** Decimal/scientific wire text must survive binary64's canonical decimal rendering. */
+  function decodeNumber(text: string, name: string): number {
+    if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) throw new Error(`Invalid ${name} number: use decimal/scientific notation, or a text field for literal text`);
+    const value = supportedNumber(Number(text), name);
+    if (decimalIdentity(text) !== decimalIdentity(String(value))) numericPrecisionError(name);
+    return value;
+  }
   function normalizeValue(field: Field, value: unknown): Value {
-    const fail = () => { throw new Error(`Invalid ${field.name} value: expected ${field.type}${field.nullable ? ' or null' : ''}`); };
+    const fail = () => { throw new Error(`Invalid ${field.name} value: expected ${field.type}${field.nullable ? ' or null' : ''}${field.type === 'number' ? '. Use a text field to retain exact digits when numeric precision is unsupported.' : ''}`); };
     if (value === null) { if (field.nullable) return null; return fail(); }
-    if (field.type === 'number' ? typeof value !== 'number' || !Number.isFinite(value) : field.type === 'boolean' ? typeof value !== 'boolean' : typeof value !== 'string') return fail();
+    if (field.type === 'number' ? typeof value !== 'number' : field.type === 'boolean' ? typeof value !== 'boolean' : typeof value !== 'string') return fail();
+    if (field.type === 'number') value = supportedNumber(value as number, field.name);
     if (field.type === 'datetime') {
       // Require a timezone and millisecond precision at most; avoid calendar rollover.
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value as string)) return fail();
@@ -155,6 +179,6 @@ export function datasetKernel() {
     if (value === null) return field.type === 'text' ? '\\N' : '';
     return field.type === 'text' && /^[\\=+\-@\t\r]/.test(value as string) ? '\\' + value : value;
   }
-  return { pageDataset, validateDefinition, normalizeValue, defaultValue, normalizeRows, inferField, growDefinition, mutateDataset, datasetMeaning, compareDatasets, encodeCSVValue };
+  return { decodeNumber, pageDataset, validateDefinition, normalizeValue, defaultValue, normalizeRows, inferField, growDefinition, mutateDataset, datasetMeaning, compareDatasets, encodeCSVValue };
 }
-export const { pageDataset, validateDefinition, normalizeValue, defaultValue, normalizeRows, inferField, growDefinition, mutateDataset, datasetMeaning, compareDatasets, encodeCSVValue } = datasetKernel();
+export const { decodeNumber, pageDataset, validateDefinition, normalizeValue, defaultValue, normalizeRows, inferField, growDefinition, mutateDataset, datasetMeaning, compareDatasets, encodeCSVValue } = datasetKernel();

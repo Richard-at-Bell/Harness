@@ -227,7 +227,13 @@ test('typed editing, iframe handle mutation, controlled agent conflict and reloa
     return { id: d.definition.id, fields: d.definition.fields, handles: d.handles };
   });
   const amount = page.getByRole('textbox', { name: 'Amount row 1', exact: true });
-  await expect(amount).toHaveValue('12.5'); await amount.fill(''); await amount.pressSequentially('21.75');
+  await expect(amount).toHaveValue('12.5');
+  await amount.fill('0.1234567890123456789');
+  await page.getByRole('button', { name: 'Save table', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'expected number' })).toContainText('Use a text field');
+  await expect(amount).toHaveValue('0.1234567890123456789');
+  expect(await page.evaluate(async () => (await (window as any).__studioTest.runtime.datasets.read('JOBDATA')).rows[0].Amount)).toBe(12.5);
+  await amount.fill(''); await amount.pressSequentially('21.75');
   await page.getByRole('button', { name: 'Save table', exact: true }).click();
   await expect.poll(() => page.evaluate(async () => (await (window as any).__studioTest.runtime.datasets.read('JOBDATA')).rows[0].Amount)).toBe(21.75);
   await page.getByRole('button', { name: 'Project', exact: true }).click();

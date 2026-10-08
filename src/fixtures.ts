@@ -1,7 +1,8 @@
 import Papa from 'papaparse';
+import { ZipReader, Uint8ArrayReader, Uint8ArrayWriter } from '@zip.js/zip.js';
 import type { FileSnapshot } from './workspace';
 import { toBytes, toText } from './workspace';
-import { datasetKernel, encodeCSVValue, defaultValue, inferField, normalizeRows, normalizeValue, validateDefinition, type Dataset, type DatasetDefinition, type DatasetMetadata, type Field, type Row, type Table, type Value } from './datasets';
+import { datasetKernel, decodeNumber, encodeCSVValue, defaultValue, inferField, normalizeRows, normalizeValue, validateDefinition, type Dataset, type DatasetDefinition, type DatasetMetadata, type Field, type Row, type Table, type Value } from './datasets';
 export type { Row, Table, Dataset, DatasetDefinition, Field } from './datasets';
 
 export const metadataPath = (path: string) => path.replace(/\.(csv|xlsx)$/, '.dataset.json');
@@ -34,6 +35,26 @@ export function generateRows(table: Table, seed: number, count: number): Row[] {
   return Array.from({ length: Math.max(1, Math.min(100, count)) }, (_, i) => Object.fromEntries(fields.map(f => [f.name,
     f.type === 'boolean' ? random() < .5 : f.type === 'number' ? Math.round(random() * 100) : f.type === 'datetime' ? new Date(Date.UTC(2026,0,1+i)).toISOString() : `${f.name} ${seed}-${i+1}`])));
 }
+/** Preserve numeric XML lexemes until precision validation. ExcelJS otherwise
+ * converts them to JS numbers before a declared field can inspect their digits. */
+async function checkWorkbookNumbers(bytes: Uint8Array) {
+  const archive = new ZipReader(new Uint8ArrayReader(bytes), { useWebWorkers: false });
+  try {
+    for (const entry of await archive.getEntries()) {
+      if (entry.directory || !/^xl\/worksheets\/[^/]+\.xml$/.test(entry.filename)) continue;
+      const xml = toText(await entry.getData!(new Uint8ArrayWriter())).replace(/<!--[\s\S]*?-->/g, '');
+      for (const cell of xml.matchAll(/<c\b(?![^>]*\/>)([^>]*)>([\s\S]*?)<\/c>/g)) {
+        const type = /\bt\s*=\s*["']([^"']*)["']/.exec(cell[1])?.[1];
+        if (type && ['b', 's', 'str', 'inlineStr', 'e', 'd'].includes(type) || /<f\b/.test(cell[2])) continue;
+        const value = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(cell[2])?.[1];
+        if (value == null) continue;
+        const text = value.replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1').replace(/&#(x[\da-f]+|\d+);/gi, (_, code: string) => String.fromCodePoint(parseInt(code.slice(code[0].toLowerCase() === 'x' ? 1 : 0), code[0].toLowerCase() === 'x' ? 16 : 10))).trim();
+        const address = /\br\s*=\s*["']([^"']*)["']/.exec(cell[1])?.[1] ?? 'cell';
+        decodeNumber(text, `${entry.filename}:${address}`);
+      }
+    }
+  } finally { await archive.close(); }
+}
 async function cells(bytes: Uint8Array, format: 'csv' | 'xlsx', count?: number): Promise<{ columns: string[]; rows: unknown[][] }> {
   if (format === 'csv') {
     const parsed = Papa.parse<string[]>(toText(bytes), { skipEmptyLines: false, delimiter: ',' });
@@ -45,6 +66,7 @@ async function cells(bytes: Uint8Array, format: 'csv' | 'xlsx', count?: number):
     if (data.some(row => row.length !== columns.length)) throw new Error('CSV row width does not match declared columns');
     return { columns, rows: data };
   }
+  await checkWorkbookNumbers(bytes);
   const ExcelJS = await import('exceljs'); const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(bytes as any); const sheet = workbook.worksheets[0];
   if (!sheet || workbook.worksheets.length !== 1) throw new Error('Workbook must contain exactly one data worksheet');
@@ -72,8 +94,7 @@ function decode(f: Field, raw: unknown): Value {
   }
   if (raw === '' || raw == null) return normalizeValue(f, null);
   if (f.type === 'number' && typeof raw === 'string') {
-    if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) throw new Error(`Invalid ${f.name} number`);
-    return normalizeValue(f, Number(raw));
+    return normalizeValue(f, decodeNumber(raw, f.name));
   }
   if (f.type === 'boolean' && typeof raw === 'string') {
     if (!['true','false'].includes(raw)) throw new Error(`Invalid ${f.name} boolean`);

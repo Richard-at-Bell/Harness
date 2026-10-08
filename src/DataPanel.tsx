@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Check, Plus, Trash2 } from 'lucide-react';
 import { useStore } from 'zustand';
+import { decodeNumber } from './datasets';
 import { useDocuments } from './documentContext';
 import { defaultValue, generateRows, tablePath, type Table } from './fixtures';
 import { useStudio, useWorkspace } from './studioContext';
@@ -12,7 +13,7 @@ function NumberCell({ value, label, disabled, onChange }: { value: string | numb
   useEffect(() => { if (!focused.current) setText(String(value ?? '')); }, [value]);
   return <input aria-label={label} inputMode="decimal" disabled={disabled} placeholder={value === null ? 'null' : undefined} value={text}
     onFocus={() => { focused.current = true; }} onBlur={() => { focused.current = false; setText(String(value ?? '')); }}
-    onChange={event => { const raw = event.target.value; setText(raw); onChange(/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw) ? Number(raw) : raw); }} />;
+    onChange={event => { const raw = event.target.value; setText(raw); let value: string | number = raw; try { value = decodeNumber(raw, label); } catch { /* Retain invalid/lossy input as a recoverable draft. */ } onChange(value); }} />;
 }
 
 export const DataPanel = memo(function DataPanel({ selectedTableId, onImport }: { selectedTableId: string; onImport: () => void }) {
